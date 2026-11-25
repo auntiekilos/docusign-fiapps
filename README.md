@@ -27,3 +27,5 @@ Then visit http://localhost:8501 on your computer and use the browser desktop li
 ## Design and scope
 
 `app.py` owns the UI and `clm/browser.py` owns browser lifecycle and navigation. Future document operations can be added to the worker's command interface so all Playwright calls remain on its thread. This iteration has no document operations, batch processing, DocuSign API integration, AI, or GPU requirement. Browser data is kept in memory, not persisted across restarts. Only use URLs and accounts you trust; the app accepts arbitrary HTTP(S) URLs and is intended for a trusted operator.
+
+A host that runs `streamlit run main.py` can start the UI using the included entry point. The Python dependencies alone do not provide the visible desktop: this app also needs the Chromium binaries, X display, VNC and noVNC services configured in the Docker image. A managed Streamlit host that only installs `requirements.txt` and starts Streamlit does not automatically run those services. Use the Compose deployment above unless the host provides an equivalent private desktop and access to it.
