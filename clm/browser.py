@@ -16,6 +16,21 @@ def log_status(message: str) -> None:
     print("\n" * 20 + "=== DOCUSIGN CLM ===\n" + message + "\n====================" + "\n" * 20, flush=True)
 
 
+class LoginError(ValueError):
+    def __init__(self, message, screenshot=None):
+        super().__init__(message)
+        self.screenshot = screenshot
+
+
+def page_image(page):
+    if page is None:
+        return None
+    try:
+        return page.screenshot(type="png", mask=[page.locator("input, textarea, [contenteditable='true']")], timeout=5000)
+    except Exception:
+        return None
+
+
 def validate_url(value: str) -> str:
     value = value.strip()
     try:
@@ -166,6 +181,7 @@ class BrowserSession:
                 log_status(message)
                 updates.put(message)
             stage = "starting the browser"
+            page = None
             try:
                 report("Starting headless browser.")
                 if playwright is None:
@@ -221,10 +237,10 @@ class BrowserSession:
                 report("Checking whether sign-in succeeded.")
                 result = "signed_in" if confirmed_login(page, on_target) else "unverified"
                 log_status("Sign-in confirmed." if result == "signed_in" else "Sign-in not confirmed.")
-                future.set_result(result)
+                future.set_result((result, page_image(page) if result != "signed_in" else None))
             except Exception as exc:
                 message = str(exc) if isinstance(exc, ValueError) else f"Could not complete sign-in while {stage}."
                 log_status(message)
-                future.set_exception(ValueError(message))
+                future.set_exception(LoginError(message, page_image(page)))
             finally:
                 username = password = None

@@ -1,7 +1,7 @@
 import os
 
 import streamlit as st
-from clm.browser import BrowserSession
+from clm.browser import BrowserSession, LoginError
 
 st.set_page_config(page_title="CLM browser")
 st.title("DocuSign CLM")
@@ -14,14 +14,19 @@ def browser_session():
 retry = st.button("Try sign-in again")
 
 if "login_result" not in st.session_state or retry:
+    st.session_state.login_image = None
     try:
         status = st.empty()
         status.info("Preparing sign-in...")
         try:
-            result = browser_session().login(os.environ.get("CLM_URL", ""), progress=status.info)
+            result, screenshot = browser_session().login(os.environ.get("CLM_URL", ""), progress=status.info)
         finally:
             status.empty()
+        st.session_state.login_image = screenshot
         st.session_state.login_result = ("success", "Signed in to DocuSign CLM.") if result == "signed_in" else ("warning", "Sign-in not confirmed. Check the configured CLM URL and the server logs.")
+    except LoginError as exc:
+        st.session_state.login_image = exc.screenshot
+        st.session_state.login_result = ("error", str(exc))
     except ValueError as exc:
         st.session_state.login_result = ("error", str(exc))
     except Exception:
@@ -29,5 +34,7 @@ if "login_result" not in st.session_state or retry:
 
 level, message = st.session_state.login_result
 getattr(st, level)(message)
+if st.session_state.get("login_image"):
+    st.image(st.session_state.login_image, caption="Page reached by the browser. Input fields are masked.")
 
 st.caption("The headless browser session stays open across reruns and is shared by users of this app.")

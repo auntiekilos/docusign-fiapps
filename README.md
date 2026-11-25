@@ -1,6 +1,6 @@
 # DocuSign CLM browser
 
-A Streamlit app that starts sign-in when you open the app and submits a plain login form using headless Playwright. Use Try sign-in again to retry. The browser and its cookies remain in memory across Streamlit reruns, until the server process or browser stops. The browser is shared by everyone who can access the app. No DocuSign API, AI model or GPU is used.
+A Streamlit app that starts sign-in when you open the app and submits a plain login form using headless Playwright. Use Try sign-in again to retry. If sign-in is not confirmed, the app shows a screenshot of the reached page with input fields masked. It holds the image in memory; page content can still contain private information, so restrict access to the app. The browser and its cookies remain in memory across Streamlit reruns, until the server process or browser stops. The browser is shared by everyone who can access the app. No DocuSign API, AI model or GPU is used.
 
 ## Configuration
 
