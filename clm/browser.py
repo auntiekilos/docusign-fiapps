@@ -61,7 +61,7 @@ def launch_browser(playwright, report=log_status):
             except Exception as error:
                 detail = str(error)
         if "Host system is missing dependencies" in detail or "error while loading shared libraries" in detail:
-            raise ValueError("The host is missing Chromium system libraries. An administrator must run: python -m playwright install-deps chromium") from exc
+            raise ValueError("The hosting environment is missing Chromium system libraries. Sign-in has not started.") from exc
         raise ValueError("The headless browser could not start. Check the host's Chromium installation and system libraries.") from exc
 
 
