@@ -7,6 +7,9 @@ import os
 import subprocess
 import sys
 import time
+import shlex
+import tempfile
+from pathlib import Path
 
 
 def log_status(message: str) -> None:
@@ -41,6 +44,34 @@ def confirmed_login(page, on_target) -> bool:
         return False
 
 
+def install_user_libraries():
+    """Extract missing Debian packages into the user's cache, without sudo."""
+    prefix = Path.home() / ".cache" / "clm-browser-libs"
+    try:
+        dry = subprocess.run([sys.executable, "-m", "playwright", "install-deps", "--dry-run", "chromium"], capture_output=True, text=True, check=True, timeout=30)
+        command = next(line for line in dry.stdout.splitlines() if "apt-get install" in line)
+        args = shlex.split(command)
+        if "install" not in args:
+            args = shlex.split(next(arg for arg in args if "apt-get install" in arg))
+        start = args.index("install") + 1
+        packages = [arg for arg in args[start:] if not arg.startswith("-") and arg not in ("&&", ";")]
+        simulation = subprocess.run(["apt-get", "-s", "install", "--no-install-recommends", *packages], capture_output=True, text=True, check=True, timeout=60)
+        missing = [line.split()[1] for line in simulation.stdout.splitlines() if line.startswith("Inst ")]
+        if not missing:
+            raise ValueError("No downloadable missing packages were found.")
+        prefix.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as temp:
+            subprocess.run(["apt-get", "download", *missing], cwd=temp, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=240)
+            for package in Path(temp).glob("*.deb"):
+                subprocess.run(["dpkg-deb", "-x", str(package), str(prefix)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
+        directories = sorted({str(p.parent) for p in prefix.rglob("*.so*") if p.is_file()})
+        if not directories:
+            raise ValueError("No shared libraries were extracted.")
+        return os.pathsep.join(directories + ([os.environ["LD_LIBRARY_PATH"]] if os.environ.get("LD_LIBRARY_PATH") else []))
+    except (OSError, subprocess.SubprocessError, StopIteration, ValueError, IndexError) as exc:
+        raise ValueError("Could not prepare browser libraries in the app environment.") from exc
+
+
 def launch_browser(playwright, report=log_status):
     """Install Playwright's matching headless browser if it is not present."""
     try:
@@ -61,7 +92,7 @@ def launch_browser(playwright, report=log_status):
             except Exception as error:
                 detail = str(error)
         if "Host system is missing dependencies" in detail or "error while loading shared libraries" in detail:
-            raise ValueError("The hosting environment is missing Chromium system libraries. Sign-in has not started.") from exc
+            raise RuntimeError("missing_browser_libraries") from exc
         raise ValueError("The headless browser could not start. Check the host's Chromium installation and system libraries.") from exc
 
 
@@ -112,7 +143,17 @@ class BrowserSession:
                     from playwright.sync_api import sync_playwright
                     playwright = sync_playwright().start()
                 if browser is None or not browser.is_connected():
-                    browser = launch_browser(playwright, report)
+                    try:
+                        browser = launch_browser(playwright, report)
+                    except RuntimeError as exc:
+                        if str(exc) != "missing_browser_libraries":
+                            raise
+                        report("Preparing browser libraries without administrator access.")
+                        library_path = install_user_libraries()
+                        playwright.stop()
+                        os.environ["LD_LIBRARY_PATH"] = library_path
+                        playwright = sync_playwright().start()
+                        browser = launch_browser(playwright, report)
                     context = None
                 if context is None:
                     context = browser.new_context()
