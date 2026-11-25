@@ -1,3 +1,5 @@
+import os
+
 import streamlit as st
 from clm.browser import BrowserSession
 
@@ -9,14 +11,12 @@ st.write("Open the CLM login page using the credentials configured on the server
 def browser_session():
     return BrowserSession()
 
-with st.form("login"):
-    url = st.text_input("DocuSign CLM login URL", placeholder="https://...")
-    submitted = st.form_submit_button("Sign in")
+submitted = st.button("Sign in")
 
 if submitted:
     try:
         with st.spinner("Submitting login..."):
-            browser_session().login(url)
+            browser_session().login(os.environ.get("CLM_URL", ""))
         st.info("Login form submitted. Authentication has not been verified.")
     except ValueError as exc:
         st.error(str(exc))
