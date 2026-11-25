@@ -180,10 +180,39 @@ class BrowserSession:
                 pass
         return future.result()
 
+    def download(self, folders, filename, destination=None, progress=None):
+        future, updates = Future(), Queue()
+        self._commands.put(("download", folders, filename, destination, future, updates))
+        deadline = time.monotonic() + 240
+        while not future.done():
+            if time.monotonic() >= deadline:
+                raise ValueError("The download timed out.")
+            try:
+                message = updates.get(timeout=0.5)
+                if progress:
+                    progress(message)
+            except Empty:
+                pass
+        return future.result()
+
     def _run(self):
         playwright = browser = context = None
         while True:
-            url, username, password, future, updates = self._commands.get()
+            command = self._commands.get()
+            if len(command) == 6 and command[0] == "download":
+                _, folders, filename, destination, future, updates = command
+                try:
+                    if context is None or browser is None or not browser.is_connected():
+                        raise ValueError("Sign in before downloading a document.")
+                    from clm.documents import download_document
+                    page = context.pages[0] if context.pages else context.new_page()
+                    path = download_document(page, folders, filename, destination, updates.put)
+                    future.set_result(str(path))
+                except Exception as exc:
+                    message = str(exc) if isinstance(exc, ValueError) else "Could not complete the document download. Check the folder and file names."
+                    future.set_exception(ValueError(message))
+                continue
+            url, username, password, future, updates = command
 
             def report(message):
                 log_status(message)

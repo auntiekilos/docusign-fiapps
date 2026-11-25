@@ -38,3 +38,20 @@ if st.session_state.get("login_image"):
     st.image(st.session_state.login_image, caption="Page reached by the browser. Input fields are masked.")
 
 st.caption("The headless browser session stays open across reruns and is shared by users of this app.")
+
+if level == "success":
+    st.subheader("Download a document")
+    with st.form("document_download"):
+        folder_text = st.text_area("Folders, one per line", value="CLIENTS\nSPAIN\nUnited States of America\n793663 - & OTHER STORIES\nNDA")
+        filename = st.text_input("File name", value="NDA_793663_& OTHER STORIES.docx")
+        destination = st.text_input("Save folder on this machine", value="", help="Leave blank to use the server's Downloads folder.")
+        download_requested = st.form_submit_button("Download")
+    if download_requested:
+        progress = st.empty()
+        try:
+            path = browser_session().download(folder_text.splitlines(), filename, destination or None, progress.info)
+            progress.empty()
+            st.success(f"Downloaded to {path}")
+        except ValueError as exc:
+            progress.empty()
+            st.error(str(exc))
