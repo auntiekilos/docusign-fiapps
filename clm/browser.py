@@ -52,10 +52,12 @@ def same_origin(actual_url: str, expected_url: str) -> bool:
 
 
 def wait_for_clm(page, target_url: str) -> bool:
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
     try:
-        page.wait_for_url(lambda current: same_origin(current.geturl(), target_url), timeout=30000)
+        page.wait_for_url(lambda current: same_origin(current, target_url), timeout=30000)
         return True
-    except Exception:
+    except PlaywrightTimeoutError:
         return False
 
 
