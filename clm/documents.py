@@ -1,6 +1,15 @@
 """Navigate CLM folders and download a document in the browser worker."""
 from pathlib import Path
+import os
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+
+def default_download_directory():
+    """Use the hosted file browser's workspace when it is available."""
+    workspace = Path('/app/home')
+    if workspace.is_dir() and os.access(workspace, os.W_OK):
+        return workspace / 'Downloads'
+    return Path.home() / 'Downloads'
 
 
 def download_document(page, folders, filename, destination=None, report=lambda message: None, snapshot=lambda: None):
@@ -48,7 +57,7 @@ def download_document(page, folders, filename, destination=None, report=lambda m
     download = event.value
     if download.failure():
         raise ValueError('The browser could not download the file.')
-    folder = Path(destination).expanduser() if destination else Path.home() / 'Downloads'
+    folder = Path(destination).expanduser() if destination else default_download_directory()
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / filename
     if path.exists():

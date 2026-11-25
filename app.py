@@ -47,7 +47,7 @@ def document_view():
     with st.form("document_download"):
         folder_text = st.text_area("Folders, one per line", value="CLIENTS\nSPAIN\nUnited States of America\n793663 - & OTHER STORIES\nNDA")
         filename = st.text_input("File name", value="NDA_793663_& OTHER STORIES.docx")
-        destination = st.text_input("Save folder on this machine", value="", help="Leave blank to use the server's Downloads folder.")
+        destination = st.text_input("Save folder on this machine", value="", help="Leave blank to use Downloads in the server's Files workspace when available.")
         download_requested = st.form_submit_button("Download")
     if download_requested:
         progress = st.empty()

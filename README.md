@@ -16,4 +16,4 @@ For Docker, set `CLM_URL` and the two secrets in your shell and run `docker comp
 
 ## Download a document
 
-After sign-in, enter each folder name on its own line, the exact file name, and optionally a server-side save folder. Download navigates the folder table and saves the file there. With no folder specified, it uses the server user's Downloads folder; the server may be a different machine from your browser. Existing files are preserved with a numbered filename. The shared app and any downloaded files must be restricted to authorized users.
+After sign-in, enter each folder name on its own line, the exact file name, and optionally a server-side save folder. Download navigates the folder table and saves the file there. With no folder specified, it uses /app/home/Downloads when the hosted Files workspace exists and is writable; otherwise it uses the server user's Downloads folder. The server may be a different machine from your browser. Existing files are preserved with a numbered filename. The shared app and any downloaded files must be restricted to authorized users.
