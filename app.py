@@ -34,12 +34,15 @@ if "login_result" not in st.session_state or retry:
 
 level, message = st.session_state.login_result
 getattr(st, level)(message)
-if st.session_state.get("login_image"):
-    st.image(st.session_state.login_image, caption="Page reached by the browser. Input fields are masked.")
-
 st.caption("The headless browser session stays open across reruns and is shared by users of this app.")
 
-if level == "success":
+@st.fragment
+def document_view():
+    image_area = st.empty()
+    if st.session_state.get("login_image"):
+        image_area.image(st.session_state.login_image, caption="Current browser view. Input fields are masked.")
+    if st.session_state.login_result[0] != "success":
+        return
     st.subheader("Download a document")
     with st.form("document_download"):
         folder_text = st.text_area("Folders, one per line", value="CLIENTS\nSPAIN\nUnited States of America\n793663 - & OTHER STORIES\nNDA")
@@ -48,10 +51,16 @@ if level == "success":
         download_requested = st.form_submit_button("Download")
     if download_requested:
         progress = st.empty()
+        def show_image(image):
+            st.session_state.login_image = image
+            image_area.image(image, caption="Current browser view. Input fields are masked.")
         try:
-            path = browser_session().download(folder_text.splitlines(), filename, destination or None, progress.info)
+            path = browser_session().download(folder_text.splitlines(), filename, destination or None, progress.info, show_image)
             progress.empty()
             st.success(f"Downloaded to {path}")
         except ValueError as exc:
             progress.empty()
             st.error(str(exc))
+
+
+document_view()

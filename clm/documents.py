@@ -3,7 +3,7 @@ from pathlib import Path
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 
-def download_document(page, folders, filename, destination=None, report=lambda message: None):
+def download_document(page, folders, filename, destination=None, report=lambda message: None, snapshot=lambda: None):
     if not folders or any(not folder.strip() for folder in folders):
         raise ValueError('Enter at least one non-empty folder name.')
     if not filename or Path(filename).name != filename or filename in ('.', '..'):
@@ -28,6 +28,7 @@ def download_document(page, folders, filename, destination=None, report=lambda m
         root_name = breadcrumbs.first.inner_text().strip()
         breadcrumbs.first.click(timeout=30000)
         page.wait_for_function("name => document.title.startsWith(name + ' - Documents')", arg=root_name, timeout=30000)
+    snapshot()
     for folder in folders:
         report(f'Opening folder: {folder}')
         folder_link = page.get_by_role('row').get_by_role('link', name=folder, exact=True)
@@ -37,9 +38,11 @@ def download_document(page, folders, filename, destination=None, report=lambda m
             dismiss_walkthrough()
             folder_link.click(timeout=30000)
         page.wait_for_function("name => document.title.startsWith(name + ' - Documents')", arg=folder, timeout=30000)
+        snapshot()
     report('Opening document actions.')
     row = page.get_by_role('row').filter(has=page.get_by_role('link', name=filename, exact=True))
     row.locator('[aria-label="Toggle Action Menu"]').click(timeout=30000)
+    snapshot()
     with page.expect_download(timeout=60000) as event:
         row.locator('[aria-label="Toggle Action Menu"]').get_by_text('Download', exact=True).click(timeout=30000)
     download = event.value

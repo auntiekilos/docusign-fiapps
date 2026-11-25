@@ -180,7 +180,7 @@ class BrowserSession:
                 pass
         return future.result()
 
-    def download(self, folders, filename, destination=None, progress=None):
+    def download(self, folders, filename, destination=None, progress=None, screenshot=None):
         future, updates = Future(), Queue()
         self._commands.put(("download", folders, filename, destination, future, updates))
         deadline = time.monotonic() + 240
@@ -188,11 +188,19 @@ class BrowserSession:
             if time.monotonic() >= deadline:
                 raise ValueError("The download timed out.")
             try:
-                message = updates.get(timeout=0.5)
-                if progress:
-                    progress(message)
+                kind, value = updates.get(timeout=0.5)
+                if kind == "progress" and progress:
+                    progress(value)
+                elif kind == "screenshot" and screenshot and value:
+                    screenshot(value)
             except Empty:
                 pass
+        while not updates.empty():
+            kind, value = updates.get_nowait()
+            if kind == "progress" and progress:
+                progress(value)
+            elif kind == "screenshot" and screenshot and value:
+                screenshot(value)
         return future.result()
 
     def _run(self):
@@ -206,7 +214,9 @@ class BrowserSession:
                         raise ValueError("Sign in before downloading a document.")
                     from clm.documents import download_document
                     page = context.pages[0] if context.pages else context.new_page()
-                    path = download_document(page, folders, filename, destination, updates.put)
+                    path = download_document(page, folders, filename, destination,
+                                             lambda message: updates.put(("progress", message)),
+                                             lambda: updates.put(("screenshot", page_image(page))))
                     future.set_result(str(path))
                 except Exception as exc:
                     message = str(exc) if isinstance(exc, ValueError) else "Could not complete the document download. Check the folder and file names."
