@@ -7,5 +7,6 @@ services:
       - CLM_URL
       - CLM_USERNAME
       - CLM_PASSWORD
+      - CLM_SUCCESS_SELECTOR
     shm_size: '1gb'
     restart: unless-stopped

@@ -16,8 +16,11 @@ submitted = st.button("Sign in")
 if submitted:
     try:
         with st.spinner("Submitting login..."):
-            browser_session().login(os.environ.get("CLM_URL", ""))
-        st.info("Login form submitted. Authentication has not been verified.")
+            result = browser_session().login(os.environ.get("CLM_URL", ""))
+        if result == "signed_in":
+            st.success("Signed in to DocuSign CLM.")
+        else:
+            st.warning("Sign-in not confirmed. Set CLM_SUCCESS_SELECTOR to a visible element that only appears after login.")
     except ValueError as exc:
         st.error(str(exc))
     except Exception:

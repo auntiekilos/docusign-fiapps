@@ -1,4 +1,4 @@
-"""Keep all Playwright operations on one long-lived worker thread."""
+"""Keep Playwright operations on one long-lived worker thread."""
 from concurrent.futures import Future
 from queue import Queue
 from threading import Thread
@@ -14,7 +14,7 @@ def validate_url(value: str) -> str:
             raise ValueError
         _ = parts.port
     except ValueError as exc:
-        raise ValueError("Enter a valid HTTPS URL without credentials.") from exc
+        raise ValueError("Set CLM_URL to a valid HTTPS URL without credentials.") from exc
     return value
 
 
@@ -23,42 +23,66 @@ class BrowserSession:
         self._commands = Queue()
         Thread(target=self._run, daemon=True, name="browser-worker").start()
 
-    def login(self, url: str) -> None:
+    def login(self, url: str) -> str:
         url = validate_url(url)
         username, password = os.environ.get("CLM_USERNAME"), os.environ.get("CLM_PASSWORD")
         if not username or not password:
             raise ValueError("Set CLM_USERNAME and CLM_PASSWORD in the server environment.")
         future = Future()
         self._commands.put((url, username, password, future))
-        future.result(timeout=100)
+        return future.result(timeout=120)
 
     def _run(self):
-        from playwright.sync_api import sync_playwright
         playwright = browser = context = None
         while True:
             url, username, password, future = self._commands.get()
+            stage = "starting the browser"
             try:
                 if playwright is None:
+                    from playwright.sync_api import sync_playwright
                     playwright = sync_playwright().start()
                 if browser is None or not browser.is_connected():
                     browser = playwright.chromium.launch(headless=True)
                     context = browser.new_context()
                 page = context.pages[0] if context.pages else context.new_page()
+                stage = "opening the login page"
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                target = urlsplit(url)
+
+                def on_target():
+                    actual = urlsplit(page.url)
+                    return (actual.scheme, actual.hostname, actual.port or 443, actual.path) == (target.scheme, target.hostname, target.port or 443, target.path)
+
                 def check_login_origin():
                     actual = urlsplit(page.url)
                     if actual.scheme != "https" or actual.hostname != "account-d.docusign.com" or actual.port not in (None, 443):
-                        raise ValueError("Unexpected login host. Credentials were not entered on that page.")
+                        raise ValueError("Unexpected login host; credentials were not entered there.")
 
-                check_login_origin()
-                page.get_by_role("textbox", name="Email").fill(username, timeout=10000)
-                page.get_by_role("button", name="Next", exact=True).click(timeout=10000)
-                page.locator('input[type="password"]').first.wait_for(state="visible", timeout=20000)
-                check_login_origin()
-                page.locator('input[type="password"]').first.fill(password)
-                page.locator('button[type="submit"], input[type="submit"]').first.click(timeout=10000)
-                future.set_result(None)
+                if not on_target():
+                    stage = "entering the email"
+                    check_login_origin()
+                    page.get_by_role("textbox", name="Email").fill(username, timeout=10000)
+                    page.get_by_role("button", name="Next", exact=True).click(timeout=10000)
+                    stage = "waiting for the password page"
+                    page.locator('input[type="password"]').first.wait_for(state="visible", timeout=20000)
+                    check_login_origin()
+                    stage = "submitting the password"
+                    page.locator('input[type="password"]').first.fill(password)
+                    page.locator('button[type="submit"], input[type="submit"]').first.click(timeout=10000)
+                    stage = "waiting for sign-in"
+                    page.wait_for_url(lambda current: (current.scheme, current.hostname, current.port or 443, current.path) == (target.scheme, target.hostname, target.port or 443, target.path), timeout=30000)
+                selector = os.environ.get("CLM_SUCCESS_SELECTOR")
+                if not selector:
+                    result = "unverified"
+                else:
+                    stage = "checking the signed-in page"
+                    page.locator(selector).first.wait_for(state="visible", timeout=15000)
+                    result = "signed_in"
+                print("CLM sign-in: " + ("confirmed" if result == "signed_in" else "not confirmed; set CLM_SUCCESS_SELECTOR"), flush=True)
+                future.set_result(result)
             except Exception as exc:
-                future.set_exception(exc)
+                message = str(exc) if isinstance(exc, ValueError) else f"Could not complete sign-in while {stage}."
+                print(f"CLM sign-in: {message}", flush=True)
+                future.set_exception(ValueError(message))
             finally:
                 username = password = None
