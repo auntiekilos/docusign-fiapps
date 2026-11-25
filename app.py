@@ -20,7 +20,7 @@ if submitted:
         if result == "signed_in":
             st.success("Signed in to DocuSign CLM.")
         else:
-            st.warning("Sign-in not confirmed. Set CLM_SUCCESS_SELECTOR to a visible element that only appears after login.")
+            st.warning("Sign-in not confirmed. Check the configured CLM URL and the server logs.")
     except ValueError as exc:
         st.error(str(exc))
     except Exception:

@@ -18,6 +18,22 @@ def validate_url(value: str) -> str:
     return value
 
 
+def confirmed_login(page, on_target) -> bool:
+    """Require the observed authenticated CLM shell, not a URL alone."""
+    indicators = (
+        page.get_by_role("button", name="profile menu"),
+        page.get_by_role("link", name="Dashboard", exact=True),
+        page.get_by_role("link", name="Documents", exact=True),
+        page.get_by_role("link", name="Tasks", exact=True),
+    )
+    try:
+        for indicator in indicators:
+            indicator.first.wait_for(state="visible", timeout=15000)
+        return on_target() and all(indicator.first.is_visible() for indicator in indicators)
+    except Exception:
+        return False
+
+
 class BrowserSession:
     def __init__(self):
         self._commands = Queue()
@@ -71,14 +87,9 @@ class BrowserSession:
                     page.locator('button[type="submit"], input[type="submit"]').first.click(timeout=10000)
                     stage = "waiting for sign-in"
                     page.wait_for_url(lambda current: (current.scheme, current.hostname, current.port or 443, current.path) == (target.scheme, target.hostname, target.port or 443, target.path), timeout=30000)
-                selector = os.environ.get("CLM_SUCCESS_SELECTOR")
-                if not selector:
-                    result = "unverified"
-                else:
-                    stage = "checking the signed-in page"
-                    page.locator(selector).first.wait_for(state="visible", timeout=15000)
-                    result = "signed_in"
-                print("CLM sign-in: " + ("confirmed" if result == "signed_in" else "not confirmed; set CLM_SUCCESS_SELECTOR"), flush=True)
+                stage = "checking the signed-in page"
+                result = "signed_in" if confirmed_login(page, on_target) else "unverified"
+                print("CLM sign-in: " + ("confirmed" if result == "signed_in" else "not confirmed"), flush=True)
                 future.set_result(result)
             except Exception as exc:
                 message = str(exc) if isinstance(exc, ValueError) else f"Could not complete sign-in while {stage}."
