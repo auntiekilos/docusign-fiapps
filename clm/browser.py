@@ -63,6 +63,12 @@ def wait_for_clm(page, target_url: str) -> bool:
 
 def confirmed_login(page, on_target) -> bool:
     """Require the observed authenticated CLM shell, not a URL alone."""
+    welcome = page.get_by_role("button", name="Got it", exact=True)
+    try:
+        if welcome.is_visible():
+            welcome.click(timeout=5000)
+    except Exception:
+        pass
     indicators = (
         page.get_by_role("button", name="profile menu"),
         page.get_by_role("link", name="Dashboard", exact=True),
@@ -203,7 +209,7 @@ class BrowserSession:
                         browser = launch_browser(playwright, report)
                     context = None
                 if context is None:
-                    context = browser.new_context()
+                    context = browser.new_context(viewport={"width": 1920, "height": 1080})
                 page = context.pages[0] if context.pages else context.new_page()
                 stage = "opening the login page"
                 report("Opening CLM URL.")
