@@ -11,19 +11,19 @@ st.write("Open the CLM login page using the credentials configured on the server
 def browser_session():
     return BrowserSession()
 
-submitted = st.button("Sign in")
+retry = st.button("Try sign-in again")
 
-if submitted:
+if "login_result" not in st.session_state or retry:
     try:
         with st.spinner("Submitting login..."):
             result = browser_session().login(os.environ.get("CLM_URL", ""))
-        if result == "signed_in":
-            st.success("Signed in to DocuSign CLM.")
-        else:
-            st.warning("Sign-in not confirmed. Check the configured CLM URL and the server logs.")
+        st.session_state.login_result = ("success", "Signed in to DocuSign CLM.") if result == "signed_in" else ("warning", "Sign-in not confirmed. Check the configured CLM URL and the server logs.")
     except ValueError as exc:
-        st.error(str(exc))
+        st.session_state.login_result = ("error", str(exc))
     except Exception:
-        st.error("Login could not be submitted. Check the server's browser installation, login page and configured selectors.")
+        st.session_state.login_result = ("error", "Login could not be submitted. Check the server logs and browser installation.")
+
+level, message = st.session_state.login_result
+getattr(st, level)(message)
 
 st.caption("The headless browser session stays open across reruns and is shared by users of this app.")

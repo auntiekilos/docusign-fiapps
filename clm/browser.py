@@ -65,6 +65,7 @@ class BrowserSession:
             url, username, password, future = self._commands.get()
             stage = "starting the browser"
             try:
+                log_status("Starting headless browser.")
                 if playwright is None:
                     from playwright.sync_api import sync_playwright
                     playwright = sync_playwright().start()
@@ -73,6 +74,7 @@ class BrowserSession:
                     context = browser.new_context()
                 page = context.pages[0] if context.pages else context.new_page()
                 stage = "opening the login page"
+                log_status("Opening CLM URL.")
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 target = urlsplit(url)
 
@@ -88,17 +90,20 @@ class BrowserSession:
                 if not on_target():
                     stage = "entering the email"
                     check_login_origin()
+                    log_status("Entering username and selecting Next.")
                     page.get_by_role("textbox", name="Email").fill(username, timeout=10000)
                     page.get_by_role("button", name="Next", exact=True).click(timeout=10000)
                     stage = "waiting for the password page"
                     page.locator('input[type="password"]').first.wait_for(state="visible", timeout=20000)
                     check_login_origin()
                     stage = "submitting the password"
+                    log_status("Entering password and submitting sign-in.")
                     page.locator('input[type="password"]').first.fill(password)
                     page.locator('button[type="submit"], input[type="submit"]').first.click(timeout=10000)
                     stage = "waiting for sign-in"
                     page.wait_for_url(lambda current: (current.scheme, current.hostname, current.port or 443, current.path) == (target.scheme, target.hostname, target.port or 443, target.path), timeout=30000)
                 stage = "checking the signed-in page"
+                log_status("Checking whether sign-in succeeded.")
                 result = "signed_in" if confirmed_login(page, on_target) else "unverified"
                 log_status("Sign-in confirmed." if result == "signed_in" else "Sign-in not confirmed.")
                 future.set_result(result)
