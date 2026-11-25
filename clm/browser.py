@@ -1,11 +1,12 @@
 """Keep Playwright operations on one long-lived worker thread."""
 from concurrent.futures import Future
-from queue import Queue
+from queue import Empty, Queue
 from threading import Thread
 from urllib.parse import urlsplit
 import os
 import subprocess
 import sys
+import time
 
 
 def log_status(message: str) -> None:
@@ -40,14 +41,14 @@ def confirmed_login(page, on_target) -> bool:
         return False
 
 
-def launch_browser(playwright):
+def launch_browser(playwright, report=log_status):
     """Install Playwright's matching headless browser if it is not present."""
     try:
         return playwright.chromium.launch(headless=True)
     except Exception as exc:
         detail = str(exc)
         if "Executable doesn't exist" in detail:
-            log_status("Installing the browser needed for sign-in. This may take a few minutes.")
+            report("Installing the browser needed for sign-in. This may take a few minutes.")
             try:
                 subprocess.run(
                     [sys.executable, "-m", "playwright", "install", "--only-shell", "chromium"],
@@ -60,7 +61,7 @@ def launch_browser(playwright):
             except Exception as error:
                 detail = str(error)
         if "Host system is missing dependencies" in detail or "error while loading shared libraries" in detail:
-            raise ValueError("The host is missing Chromium system libraries. Install Playwright's Chromium system dependencies on the host.") from exc
+            raise ValueError("The host is missing Chromium system libraries. An administrator must run: python -m playwright install-deps chromium") from exc
         raise ValueError("The headless browser could not start. Check the host's Chromium installation and system libraries.") from exc
 
 
@@ -69,7 +70,7 @@ class BrowserSession:
         self._commands = Queue()
         Thread(target=self._run, daemon=True, name="browser-worker").start()
 
-    def login(self, url: str) -> str:
+    def login(self, url: str, progress=None) -> str:
         try:
             url = validate_url(url)
         except ValueError as exc:
@@ -82,27 +83,42 @@ class BrowserSession:
             raise ValueError(message)
         log_status("Sign-in started.")
         future = Future()
-        self._commands.put((url, username, password, future))
-        return future.result(timeout=480)
+        updates = Queue()
+        self._commands.put((url, username, password, future, updates))
+        deadline = time.monotonic() + 480
+        while not future.done():
+            if time.monotonic() >= deadline:
+                raise ValueError("Browser setup or sign-in timed out. Check the server logs.")
+            try:
+                message = updates.get(timeout=0.5)
+                if progress:
+                    progress(message)
+            except Empty:
+                pass
+        return future.result()
 
     def _run(self):
         playwright = browser = context = None
         while True:
-            url, username, password, future = self._commands.get()
+            url, username, password, future, updates = self._commands.get()
+
+            def report(message):
+                log_status(message)
+                updates.put(message)
             stage = "starting the browser"
             try:
-                log_status("Starting headless browser.")
+                report("Starting headless browser.")
                 if playwright is None:
                     from playwright.sync_api import sync_playwright
                     playwright = sync_playwright().start()
                 if browser is None or not browser.is_connected():
-                    browser = launch_browser(playwright)
+                    browser = launch_browser(playwright, report)
                     context = None
                 if context is None:
                     context = browser.new_context()
                 page = context.pages[0] if context.pages else context.new_page()
                 stage = "opening the login page"
-                log_status("Opening CLM URL.")
+                report("Opening CLM URL.")
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 target = urlsplit(url)
 
@@ -118,20 +134,20 @@ class BrowserSession:
                 if not on_target():
                     stage = "entering the email"
                     check_login_origin()
-                    log_status("Entering username and selecting Next.")
+                    report("Entering username and selecting Next.")
                     page.get_by_role("textbox", name="Email").fill(username, timeout=10000)
                     page.get_by_role("button", name="Next", exact=True).click(timeout=10000)
                     stage = "waiting for the password page"
                     page.locator('input[type="password"]').first.wait_for(state="visible", timeout=20000)
                     check_login_origin()
                     stage = "submitting the password"
-                    log_status("Entering password and submitting sign-in.")
+                    report("Entering password and submitting sign-in.")
                     page.locator('input[type="password"]').first.fill(password)
                     page.locator('button[type="submit"], input[type="submit"]').first.click(timeout=10000)
                     stage = "waiting for sign-in"
                     page.wait_for_url(lambda current: (current.scheme, current.hostname, current.port or 443, current.path) == (target.scheme, target.hostname, target.port or 443, target.path), timeout=30000)
                 stage = "checking the signed-in page"
-                log_status("Checking whether sign-in succeeded.")
+                report("Checking whether sign-in succeeded.")
                 result = "signed_in" if confirmed_login(page, on_target) else "unverified"
                 log_status("Sign-in confirmed." if result == "signed_in" else "Sign-in not confirmed.")
                 future.set_result(result)

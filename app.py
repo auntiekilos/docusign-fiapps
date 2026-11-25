@@ -15,8 +15,12 @@ retry = st.button("Try sign-in again")
 
 if "login_result" not in st.session_state or retry:
     try:
-        with st.spinner("Submitting login..."):
-            result = browser_session().login(os.environ.get("CLM_URL", ""))
+        status = st.empty()
+        status.info("Preparing sign-in...")
+        try:
+            result = browser_session().login(os.environ.get("CLM_URL", ""), progress=status.info)
+        finally:
+            status.empty()
         st.session_state.login_result = ("success", "Signed in to DocuSign CLM.") if result == "signed_in" else ("warning", "Sign-in not confirmed. Check the configured CLM URL and the server logs.")
     except ValueError as exc:
         st.session_state.login_result = ("error", str(exc))
