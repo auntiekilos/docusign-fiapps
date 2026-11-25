@@ -4,6 +4,8 @@ from queue import Queue
 from threading import Thread
 from urllib.parse import urlsplit
 import os
+import subprocess
+import sys
 
 
 def log_status(message: str) -> None:
@@ -38,6 +40,30 @@ def confirmed_login(page, on_target) -> bool:
         return False
 
 
+def launch_browser(playwright):
+    """Install Playwright's matching headless browser if it is not present."""
+    try:
+        return playwright.chromium.launch(headless=True)
+    except Exception as exc:
+        detail = str(exc)
+        if "Executable doesn't exist" in detail:
+            log_status("Installing the browser needed for sign-in. This may take a few minutes.")
+            try:
+                subprocess.run(
+                    [sys.executable, "-m", "playwright", "install", "--only-shell", "chromium"],
+                    check=True, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except (subprocess.SubprocessError, OSError) as error:
+                raise ValueError("Browser download failed. The host must allow Playwright's Chromium download.") from error
+            try:
+                return playwright.chromium.launch(headless=True)
+            except Exception as error:
+                detail = str(error)
+        if "Host system is missing dependencies" in detail or "error while loading shared libraries" in detail:
+            raise ValueError("The host is missing Chromium system libraries. Install Playwright's Chromium system dependencies on the host.") from exc
+        raise ValueError("The headless browser could not start. Check the host's Chromium installation and system libraries.") from exc
+
+
 class BrowserSession:
     def __init__(self):
         self._commands = Queue()
@@ -57,7 +83,7 @@ class BrowserSession:
         log_status("Sign-in started.")
         future = Future()
         self._commands.put((url, username, password, future))
-        return future.result(timeout=120)
+        return future.result(timeout=480)
 
     def _run(self):
         playwright = browser = context = None
@@ -70,7 +96,9 @@ class BrowserSession:
                     from playwright.sync_api import sync_playwright
                     playwright = sync_playwright().start()
                 if browser is None or not browser.is_connected():
-                    browser = playwright.chromium.launch(headless=True)
+                    browser = launch_browser(playwright)
+                    context = None
+                if context is None:
                     context = browser.new_context()
                 page = context.pages[0] if context.pages else context.new_page()
                 stage = "opening the login page"
