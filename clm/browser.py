@@ -45,15 +45,18 @@ class BrowserSession:
                     context = browser.new_context()
                 page = context.pages[0] if context.pages else context.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                target = urlsplit(url)
-                actual = urlsplit(page.url)
-                if actual.scheme != "https" or actual.hostname != target.hostname or actual.port != target.port:
-                    raise ValueError("Login redirected to a different origin. Credentials were not entered.")
-                username_field = page.locator(os.getenv("CLM_USERNAME_SELECTOR", 'input[type="email"], input[autocomplete="username"], input[name="username"], input[name="email"]')).first
-                password_field = page.locator(os.getenv("CLM_PASSWORD_SELECTOR", 'input[type="password"]')).first
-                username_field.fill(username, timeout=10000)
-                password_field.fill(password, timeout=10000)
-                page.locator(os.getenv("CLM_SUBMIT_SELECTOR", 'button[type="submit"], input[type="submit"]')).first.click(timeout=10000)
+                def check_login_origin():
+                    actual = urlsplit(page.url)
+                    if actual.scheme != "https" or actual.hostname != "account-d.docusign.com" or actual.port not in (None, 443):
+                        raise ValueError("Unexpected login host. Credentials were not entered on that page.")
+
+                check_login_origin()
+                page.get_by_role("textbox", name="Email").fill(username, timeout=10000)
+                page.get_by_role("button", name="Next", exact=True).click(timeout=10000)
+                page.locator('input[type="password"]').first.wait_for(state="visible", timeout=20000)
+                check_login_origin()
+                page.locator('input[type="password"]').first.fill(password)
+                page.locator('button[type="submit"], input[type="submit"]').first.click(timeout=10000)
                 future.set_result(None)
             except Exception as exc:
                 future.set_exception(exc)

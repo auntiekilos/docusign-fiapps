@@ -4,9 +4,9 @@ A Streamlit app that submits a plain login form using headless Playwright. The b
 
 ## Configuration
 
-Set `CLM_URL` to your HTTPS CLM login URL, and set `CLM_USERNAME` and `CLM_PASSWORD` as private environment secrets on the server. Do not commit them or put them in the URL. Restrict access to the Streamlit app: anyone with access can use the shared session and submit a login. The app accepts HTTPS URLs only and refuses to enter credentials after a cross-origin redirect. Use only your trusted CLM login URL.
+Set `CLM_URL` to your HTTPS CLM login URL, and set `CLM_USERNAME` and `CLM_PASSWORD` as private environment secrets on the server. Do not commit them or put them in the URL. Restrict access to the Streamlit app: anyone with access can use the shared session and submit a login. The app accepts HTTPS URLs only and only enters credentials on the observed DocuSign demo login host. Use only your trusted CLM login URL.
 
-The login form must have both fields on the same page. The default selectors recognize common email/username and password inputs and a submit button. If needed, set `CLM_USERNAME_SELECTOR`, `CLM_PASSWORD_SELECTOR` and `CLM_SUBMIT_SELECTOR` to CSS selectors matching your login page. No SSO or MFA flow is implemented. Submitting the form does not prove authentication succeeded; the actual CLM page must be inspected to implement a reliable success check.
+The UAT URL redirects to `account-d.docusign.com`. The app enters the email, selects **Next**, then attempts the password and submit step on that host. The email step was inspected, but the password step and successful authentication have not been verified with an account. Other login providers, SSO and MFA are not implemented. Submitting the form does not prove authentication succeeded.
 
 For ChurroStack, the host must install the Chromium browser and its Linux system libraries in the Streamlit container. Installing `requirements.txt` alone does not install Chromium. With a terminal and appropriate system permissions, run `python -m playwright install --with-deps chromium`; otherwise the platform must supply these dependencies. The app entry point is `main.py`.
 
