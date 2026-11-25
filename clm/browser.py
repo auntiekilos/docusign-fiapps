@@ -28,6 +28,22 @@ def validate_url(value: str) -> str:
     return value
 
 
+def same_origin(actual_url: str, expected_url: str) -> bool:
+    try:
+        actual, expected = urlsplit(actual_url), urlsplit(expected_url)
+        return (actual.scheme, actual.hostname, actual.port or 443) == (expected.scheme, expected.hostname, expected.port or 443)
+    except ValueError:
+        return False
+
+
+def wait_for_clm(page, target_url: str) -> bool:
+    try:
+        page.wait_for_url(lambda current: same_origin(current.geturl(), target_url), timeout=30000)
+        return True
+    except Exception:
+        return False
+
+
 def confirmed_login(page, on_target) -> bool:
     """Require the observed authenticated CLM shell, not a URL alone."""
     indicators = (
@@ -174,11 +190,9 @@ class BrowserSession:
                 stage = "opening the login page"
                 report("Opening CLM URL.")
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                target = urlsplit(url)
 
                 def on_target():
-                    actual = urlsplit(page.url)
-                    return (actual.scheme, actual.hostname, actual.port or 443, actual.path) == (target.scheme, target.hostname, target.port or 443, target.path)
+                    return same_origin(page.url, url)
 
                 def check_login_origin():
                     actual = urlsplit(page.url)
@@ -199,7 +213,10 @@ class BrowserSession:
                     page.locator('input[type="password"]').first.fill(password)
                     page.locator('button[type="submit"], input[type="submit"]').first.click(timeout=10000)
                     stage = "waiting for sign-in"
-                    page.wait_for_url(lambda current: (current.scheme, current.hostname, current.port or 443, current.path) == (target.scheme, target.hostname, target.port or 443, target.path), timeout=30000)
+                    if not wait_for_clm(page, url):
+                        if same_origin(page.url, "https://account-d.docusign.com"):
+                            raise ValueError("Sign-in did not reach CLM. DocuSign is still showing the sign-in or verification page; login is not confirmed.")
+                        raise ValueError("Sign-in did not reach the configured CLM site. Login is not confirmed.")
                 stage = "checking the signed-in page"
                 report("Checking whether sign-in succeeded.")
                 result = "signed_in" if confirmed_login(page, on_target) else "unverified"
