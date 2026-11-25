@@ -245,7 +245,7 @@ class BrowserSession:
                 report("Checking whether sign-in succeeded.")
                 result = "signed_in" if confirmed_login(page, on_target) else "unverified"
                 log_status("Sign-in confirmed." if result == "signed_in" else "Sign-in not confirmed.")
-                future.set_result((result, page_image(page) if result != "signed_in" else None))
+                future.set_result((result, page_image(page)))
             except Exception as exc:
                 message = str(exc) if isinstance(exc, ValueError) else f"Could not complete sign-in while {stage}."
                 log_status(message)
