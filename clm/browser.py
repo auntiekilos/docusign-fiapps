@@ -6,6 +6,10 @@ from urllib.parse import urlsplit
 import os
 
 
+def log_status(message: str) -> None:
+    print("\n" * 20 + "=== DOCUSIGN CLM ===\n" + message + "\n====================" + "\n" * 20, flush=True)
+
+
 def validate_url(value: str) -> str:
     value = value.strip()
     try:
@@ -40,10 +44,17 @@ class BrowserSession:
         Thread(target=self._run, daemon=True, name="browser-worker").start()
 
     def login(self, url: str) -> str:
-        url = validate_url(url)
+        try:
+            url = validate_url(url)
+        except ValueError as exc:
+            log_status(str(exc))
+            raise
         username, password = os.environ.get("CLM_USERNAME"), os.environ.get("CLM_PASSWORD")
         if not username or not password:
-            raise ValueError("Set CLM_USERNAME and CLM_PASSWORD in the server environment.")
+            message = "Set CLM_USERNAME and CLM_PASSWORD in the server environment."
+            log_status(message)
+            raise ValueError(message)
+        log_status("Sign-in started.")
         future = Future()
         self._commands.put((url, username, password, future))
         return future.result(timeout=120)
@@ -89,11 +100,11 @@ class BrowserSession:
                     page.wait_for_url(lambda current: (current.scheme, current.hostname, current.port or 443, current.path) == (target.scheme, target.hostname, target.port or 443, target.path), timeout=30000)
                 stage = "checking the signed-in page"
                 result = "signed_in" if confirmed_login(page, on_target) else "unverified"
-                print("CLM sign-in: " + ("confirmed" if result == "signed_in" else "not confirmed"), flush=True)
+                log_status("Sign-in confirmed." if result == "signed_in" else "Sign-in not confirmed.")
                 future.set_result(result)
             except Exception as exc:
                 message = str(exc) if isinstance(exc, ValueError) else f"Could not complete sign-in while {stage}."
-                print(f"CLM sign-in: {message}", flush=True)
+                log_status(message)
                 future.set_exception(ValueError(message))
             finally:
                 username = password = None
