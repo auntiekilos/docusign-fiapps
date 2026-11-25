@@ -44,32 +44,45 @@ def confirmed_login(page, on_target) -> bool:
         return False
 
 
-def install_user_libraries():
-    """Extract missing Debian packages into the user's cache, without sudo."""
+def install_user_libraries(report=log_status):
+    """Resolve and unpack Debian browser libraries in a writable cache."""
     prefix = Path.home() / ".cache" / "clm-browser-libs"
+    stage = "discovering browser packages"
     try:
         dry = subprocess.run([sys.executable, "-m", "playwright", "install-deps", "--dry-run", "chromium"], capture_output=True, text=True, check=True, timeout=30)
         command = next(line for line in dry.stdout.splitlines() if "apt-get install" in line)
         args = shlex.split(command)
         if "install" not in args:
             args = shlex.split(next(arg for arg in args if "apt-get install" in arg))
-        start = args.index("install") + 1
-        packages = [arg for arg in args[start:] if not arg.startswith("-") and arg not in ("&&", ";")]
-        simulation = subprocess.run(["apt-get", "-s", "install", "--no-install-recommends", *packages], capture_output=True, text=True, check=True, timeout=60)
-        missing = [line.split()[1] for line in simulation.stdout.splitlines() if line.startswith("Inst ")]
-        if not missing:
-            raise ValueError("No downloadable missing packages were found.")
+        packages = [arg for arg in args[args.index("install") + 1:] if not arg.startswith("-") and arg not in ("&&", ";")]
+        if not packages:
+            raise ValueError("No browser packages were identified")
         prefix.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as temp:
-            subprocess.run(["apt-get", "download", *missing], cwd=temp, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=240)
-            for package in Path(temp).glob("*.deb"):
-                subprocess.run(["dpkg-deb", "-x", str(package), str(prefix)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
+            temp_path = Path(temp)
+            lists = temp_path / "lists"
+            (lists / "partial").mkdir(parents=True)
+            apt = ["apt-get", "-o", f"Dir::State::lists={lists}"]
+            stage = "refreshing the package index"
+            report("Preparing a private package index (no administrator access).")
+            subprocess.run([*apt, "update"], capture_output=True, check=True, timeout=120)
+            stage = "resolving browser packages"
+            simulation = subprocess.run([*apt, "-s", "install", "--no-install-recommends", *packages], capture_output=True, text=True, check=True, timeout=60)
+            missing = [line.split()[1] for line in simulation.stdout.splitlines() if line.startswith("Inst ")]
+            if not missing:
+                raise ValueError("The package manager found no missing packages")
+            stage = "downloading browser packages"
+            report("Downloading missing browser libraries into the app cache.")
+            subprocess.run([*apt, "download", *missing], cwd=temp, capture_output=True, check=True, timeout=240)
+            stage = "unpacking browser packages"
+            for package in temp_path.glob("*.deb"):
+                subprocess.run(["dpkg-deb", "-x", str(package), str(prefix)], capture_output=True, check=True, timeout=30)
         directories = sorted({str(p.parent) for p in prefix.rglob("*.so*") if p.is_file()})
         if not directories:
-            raise ValueError("No shared libraries were extracted.")
+            raise ValueError("Downloaded packages contained no shared libraries")
         return os.pathsep.join(directories + ([os.environ["LD_LIBRARY_PATH"]] if os.environ.get("LD_LIBRARY_PATH") else []))
     except (OSError, subprocess.SubprocessError, StopIteration, ValueError, IndexError) as exc:
-        raise ValueError("Could not prepare browser libraries in the app environment.") from exc
+        raise ValueError(f"Browser setup failed while {stage}. The host may not provide Debian package sources or network access.") from exc
 
 
 def launch_browser(playwright, report=log_status):
@@ -149,7 +162,7 @@ class BrowserSession:
                         if str(exc) != "missing_browser_libraries":
                             raise
                         report("Preparing browser libraries without administrator access.")
-                        library_path = install_user_libraries()
+                        library_path = install_user_libraries(report)
                         playwright.stop()
                         os.environ["LD_LIBRARY_PATH"] = library_path
                         playwright = sync_playwright().start()
