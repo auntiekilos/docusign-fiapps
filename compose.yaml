@@ -3,6 +3,8 @@ services:
     build: .
     ports:
       - "127.0.0.1:8501:8501"
-      - "127.0.0.1:6080:6080"
+    environment:
+      - CLM_USERNAME
+      - CLM_PASSWORD
     shm_size: '1gb'
     restart: unless-stopped

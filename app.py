@@ -1,28 +1,26 @@
 import streamlit as st
-
 from clm.browser import BrowserSession
 
-st.set_page_config(page_title="CLM browser", page_icon="🔐")
-st.title("DocuSign CLM browser")
-st.write("Open your CLM URL, then sign in manually in the browser desktop.")
-
+st.set_page_config(page_title="CLM browser")
+st.title("DocuSign CLM")
+st.write("Open the CLM login page using the credentials configured on the server.")
 
 @st.cache_resource
 def browser_session():
     return BrowserSession()
 
-
-with st.form("open_url"):
-    url = st.text_input("DocuSign CLM URL", placeholder="https://...")
-    submitted = st.form_submit_button("Open browser")
+with st.form("login"):
+    url = st.text_input("DocuSign CLM login URL", placeholder="https://...")
+    submitted = st.form_submit_button("Sign in")
 
 if submitted:
     try:
-        with st.spinner("Opening browser..."):
-            browser_session().navigate(url)
-        st.success("Browser opened. Complete sign-in in the browser desktop.")
-    except Exception as exc:
-        st.error(f"Could not open the URL: {exc}")
+        with st.spinner("Submitting login..."):
+            browser_session().login(url)
+        st.info("Login form submitted. Authentication has not been verified.")
+    except ValueError as exc:
+        st.error(str(exc))
+    except Exception:
+        st.error("Login could not be submitted. Check the server's browser installation, login page and configured selectors.")
 
-st.markdown("[Open browser desktop](http://localhost:6080/vnc.html?autoconnect=true&resize=scale)")
-st.caption("For a remote server, connect through the SSH tunnel described in the README. This app uses one shared browser session.")
+st.caption("The headless browser session stays open across reruns and is shared by users of this app.")
