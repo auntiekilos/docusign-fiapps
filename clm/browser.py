@@ -256,14 +256,31 @@ class BrowserSession:
         from clm.fileparts import configured_zones
         from clm.recovery import preserve_interrupted_uploads
         preserve_interrupted_uploads(configured_zones()[0])
+        from clm.reports import ReportUnconfirmed, REPORT_RETRY_SECONDS
         total = 0
+        def operation_with_report_retry(name):
+            while True:
+                try:
+                    return self._operation(name, progress, screenshot, event)
+                except ReportUnconfirmed:
+                    if progress:
+                        progress("Report not confirmed. Waiting 5 minutes before checking it in a fresh browser.")
+                    time.sleep(REPORT_RETRY_SECONDS)
+                    self._operation("close", progress, screenshot)
+                    result, image = self.login(os.environ.get("CLM_URL", ""), progress)
+                    if screenshot and image:
+                        screenshot(image)
+                    if result != "signed_in":
+                        raise ValueError("Sign-in not confirmed after browser restart.")
+                    if name == "total":
+                        self._operation("prepare_search", progress, screenshot, event)
         try:
             while True:
-                count = self._operation("filepart", progress, screenshot, event)
+                count = operation_with_report_retry("filepart")
                 if count > 0:
                     total += count
                 if count == 0:
-                    self._operation("total", progress, screenshot, event)
+                    operation_with_report_retry("total")
                     return total
                 if progress:
                     progress("Waiting 10 minutes for DocuSign before a clean search.")
@@ -295,6 +312,15 @@ class BrowserSession:
                 except Exception as exc:
                     future.set_exception(ValueError("Could not close the browser session."))
                 continue
+            if len(command) == 3 and command[0] == "prepare_search":
+                _, future, updates = command
+                try:
+                    from clm.fileparts import configured_zones, select_search
+                    select_search(context.pages[0], lambda value: updates.put(("progress", value)), configured_zones()[0])
+                    future.set_result(None)
+                except Exception as exc:
+                    future.set_exception(ValueError("Could not return to the zone search after restarting the browser."))
+                continue
             if len(command) == 3 and command[0] == "total":
                 _, future, updates = command
                 try:
@@ -310,7 +336,7 @@ class BrowserSession:
                     updates.put(("event", {"type": "ledger_uploaded", "name": report_path.name, "uploaded_at": datetime.now(timezone.utc).isoformat(), "issue_count": total_report_issue_count(report_path)}))
                     future.set_result(None)
                 except Exception as exc:
-                    future.set_exception(ValueError(str(exc) if isinstance(exc, ValueError) else
+                    future.set_exception(exc if isinstance(exc, ValueError) else ValueError(
                         "Total ledger upload could not be confirmed. Reconcile it before retrying."))
                 continue
             if len(command) == 3 and command[0] == "filepart":
@@ -325,7 +351,7 @@ class BrowserSession:
                                          event=lambda value: updates.put(("event", value)))
                     future.set_result(result)
                 except Exception as exc:
-                    future.set_exception(ValueError(str(exc) if isinstance(exc, ValueError) else
+                    future.set_exception(exc if isinstance(exc, ValueError) else ValueError(
                         "Processing stopped. Check CLM before retrying, especially if upload was submitted."))
                 continue
             if len(command) == 6 and command[0] == "download":

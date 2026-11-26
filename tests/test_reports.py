@@ -153,7 +153,8 @@ def test_interrupted_page_report_reuses_same_prepared_file(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize('visible,should_raise', [(True, False), (False, True)])
-def test_submitted_report_is_checked_without_resubmission(tmp_path, visible, should_raise):
+def test_submitted_report_is_checked_without_resubmission(tmp_path, monkeypatch, visible, should_raise):
+    monkeypatch.setenv("CLM_ZONES", "Zona Sur")
     from clm.reports import upload_report, write_state
     target = tmp_path / 'report.csv'
     target.write_text('report')
@@ -177,7 +178,38 @@ def test_submitted_report_is_checked_without_resubmission(tmp_path, visible, sho
     search = Page()
     search.url = 'https://example.test/search?aid=1'
     if should_raise:
-        with pytest.raises(ValueError, match='submitted but is not visible'):
+        with pytest.raises(ValueError, match='not visible yet'):
             upload_report(search, target, lambda _: None, lambda _: None)
     else:
         upload_report(search, target, lambda _: None, lambda _: None)
+
+
+def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkeypatch):
+    from clm.reports import upload_report, write_state
+    monkeypatch.setenv('CLM_ZONES', 'Zona Sur')
+    target = tmp_path / 'report.csv'
+    target.write_text('report')
+    write_state(tmp_path / 'state.json', {'status': 'submitted', 'filename': target.name, 'retry_after': 1})
+    visited, uploads = [], []
+    class Locator:
+        def __init__(self, name=None): self.name = name
+        def is_visible(self): return False
+        def wait_for(self, **kwargs): pass
+        def click(self, **kwargs):
+            if self.name: visited.append(self.name)
+        def count(self): return len(uploads)
+        def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
+        @property
+        def first(self): return self
+        def set_input_files(self, path): uploads.append(path)
+    class Page:
+        def __init__(self): self.context = self
+        def new_page(self): return self
+        def goto(self, *args, **kwargs): pass
+        def locator(self, *args, **kwargs): return Locator()
+        def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
+        def close(self): pass
+    page = Page()
+    page.url = 'https://example.test/search?aid=1'
+    upload_report(page, target, lambda _: None, lambda _: None)
+    assert 'Zona Sur' in visited and uploads == [str(target)]

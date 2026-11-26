@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
@@ -69,6 +70,11 @@ def create_page_report(zone, entries):
     return target
 
 REPORT_FOLDERS = ('Users', 'Internal', 'Registro correcciones filepart')
+REPORT_RETRY_SECONDS = 5 * 60
+
+
+class ReportUnconfirmed(ValueError):
+    pass
 
 
 def upload_report(search_page, report_path, report, snapshot):
@@ -88,7 +94,8 @@ def upload_report(search_page, report_path, report, snapshot):
                 close.click(force=True)
         dismiss()
         page.locator('a[aria-label^="Navigate to folder "]').first.wait_for(timeout=30000)
-        for folder in REPORT_FOLDERS:
+        from clm.fileparts import configured_zones
+        for folder in (*REPORT_FOLDERS, configured_zones()[0]):
             dismiss()
             page.get_by_role('row').get_by_role('link', name=folder, exact=True).click(timeout=30000)
             page.locator('a[aria-label="Navigate to folder ' + folder + '"]').wait_for(timeout=30000)
@@ -98,17 +105,27 @@ def upload_report(search_page, report_path, report, snapshot):
         saved = json.loads(state.read_text(encoding='utf-8')) if state.exists() else {}
         status = saved.get('status')
         if status in ('submitted', 'uploaded'):
-            if not existing.count():
-                raise ValueError(f'Report {report_path.name} was submitted but is not visible. Check DocuSign before continuing.')
-            write_state(state, {'status': 'uploaded', 'filename': report_path.name})
-            return
+            if existing.count():
+                write_state(state, {'status': 'uploaded', 'filename': report_path.name})
+                return
+            if 'retry_after' not in saved:
+                saved['retry_after'] = time.time() + REPORT_RETRY_SECONDS
+                write_state(state, saved)
+            if time.time() < saved['retry_after']:
+                raise ReportUnconfirmed(f'Report {report_path.name} is not visible yet.')
+            # A fresh browser has checked the zone folder after the waiting period.
+            status = 'pending'
         if existing.count():
             raise ValueError(f'Report {report_path.name} already exists in DocuSign. Check it before continuing.')
         report(f'Uploading report {report_path.name}.')
         page.get_by_role('menuitem', name='File', exact=True).click()
-        write_state(state, {'status': 'submitted', 'filename': report_path.name})
-        page.locator('li.fileUploadButton input[type=file]').set_input_files(str(report_path))
-        existing.wait_for(timeout=120000)
+        write_state(state, {'status': 'submitted', 'filename': report_path.name,
+                            'retry_after': time.time() + REPORT_RETRY_SECONDS})
+        try:
+            page.locator('li.fileUploadButton input[type=file]').set_input_files(str(report_path))
+            existing.wait_for(timeout=120000)
+        except Exception as exc:
+            raise ReportUnconfirmed(f'Report {report_path.name} was not confirmed.') from exc
         write_state(state, {'status': 'uploaded', 'filename': report_path.name})
         snapshot(page)
     finally:
