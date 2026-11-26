@@ -7,8 +7,9 @@ import os
 
 import streamlit as st
 
-from clm.browser import BrowserSession
+from clm.browser import BrowserSession, processing_lock
 from clm.fileparts import configured_zones
+from clm.recovery import interrupted_uploads, preserve_interrupted_uploads
 
 st.set_page_config(page_title="CLM progress", layout="wide", initial_sidebar_state="collapsed")
 
@@ -173,6 +174,15 @@ ss.setdefault("notice_bad", False)
 ss.setdefault("login_error", False)
 
 zone, zone_error = configured_zone()
+if zone and interrupted_uploads():
+    st.warning("An upload was interrupted. Its outcome is unknown. Check the document in DocuSign; it will not be uploaded again automatically.")
+    if st.button("Record interrupted uploads as unconfirmed"):
+        try:
+            with processing_lock():
+                preserve_interrupted_uploads(zone)
+            st.rerun()
+        except (ValueError, OSError, KeyError) as exc:
+            st.error(f"Could not record interrupted uploads: {exc}")
 button = st.empty()  # one fixed spot (see .stButton); emptied while work runs
 view = st.empty()
 ledger_view = st.empty()
@@ -222,7 +232,7 @@ def run_zone():
     docs.clear(); reports.clear()
     ss.notice, ss.notice_bad = "", False
     index = {}
-    state = {"done": 0, "status": ""}
+    state = {"done": 0, "status": "", "issue_count": None}
 
     def count():
         return f"{state['done']} processed" + (f" · {state['status']}" if state["status"] else "")
@@ -254,6 +264,8 @@ def run_zone():
                 row.update(finish=None, path=None, error=f"{reason} (attempt {attempts} of {item.get('max_attempts', MAX_ATTEMPTS)})" if attempts else reason)
         elif kind == "ledger_uploaded":
             reports.append((str(item.get("name", "—")), clock(item.get("uploaded_at"))))
+            if "issue_count" in item:
+                state["issue_count"] = item["issue_count"]
             ledger_view.markdown(ledgers(reports), unsafe_allow_html=True)
         paint()
 
@@ -265,7 +277,9 @@ def run_zone():
     try:
         total = browser_session().process_filepart(progress, None, event)
         state["status"] = ""
-        ss.notice = f"{state['done']} processed. Complete" if total is None else f"{total} processed. Complete"
+        count_done = state["done"] if total is None else total
+        completion = "Complete with issues" if state["issue_count"] else "Complete"
+        ss.notice = f"{count_done} processed. {completion}"
     except ValueError as exc:
         ss.notice, ss.notice_bad = f"Stopped: {exc}", True
     except Exception:

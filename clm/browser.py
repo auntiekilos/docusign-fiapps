@@ -1,5 +1,7 @@
 """Keep Playwright operations on one long-lived worker thread."""
 from concurrent.futures import Future
+from contextlib import contextmanager
+import fcntl
 from queue import Empty, Queue
 from threading import Thread
 from urllib.parse import urlsplit
@@ -152,6 +154,25 @@ def launch_browser(playwright, report=log_status):
 REINDEX_WAIT_SECONDS = 10 * 60
 
 
+@contextmanager
+def processing_lock():
+    """Allow one processing run per data directory, including across processes."""
+    from clm.fileparts import data_dir
+
+    root = data_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    # Keep the file in place: removing it could allow a second inode to be locked.
+    with (root / '.processing.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError('Another run is using this data directory. Wait for it to finish.') from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 class BrowserSession:
     def __init__(self):
         self._commands = Queue()
@@ -228,6 +249,10 @@ class BrowserSession:
     def process_filepart(self, progress=None, screenshot=None, event=None):
         from clm.fileparts import configured_zones
         configured_zones()
+        with processing_lock():
+            return self._process_filepart(progress, screenshot, event)
+
+    def _process_filepart(self, progress=None, screenshot=None, event=None):
         total = 0
         try:
             while True:
@@ -273,13 +298,13 @@ class BrowserSession:
                     if context is None or browser is None or not browser.is_connected():
                         raise ValueError("Sign in before uploading the total ledger.")
                     from clm.fileparts import configured_zones
-                    from clm.reports import create_total_report, upload_report
+                    from clm.reports import create_total_report, upload_report, total_report_issue_count
                     zone = configured_zones()[0]
                     page = context.pages[0]
                     report_path = create_total_report(zone)
                     upload_report(page, report_path, lambda value: updates.put(("progress", value)),
                                   lambda current: updates.put(("screenshot", page_image(current))))
-                    updates.put(("event", {"type": "ledger_uploaded", "name": report_path.name, "uploaded_at": datetime.now(timezone.utc).isoformat()}))
+                    updates.put(("event", {"type": "ledger_uploaded", "name": report_path.name, "uploaded_at": datetime.now(timezone.utc).isoformat(), "issue_count": total_report_issue_count(report_path)}))
                     future.set_result(None)
                 except Exception as exc:
                     future.set_exception(ValueError(str(exc) if isinstance(exc, ValueError) else

@@ -121,7 +121,7 @@ def test_uncertain_upload_is_never_retried(tmp_path, monkeypatch):
     assert not fileparts.attempt_path('Zona Sur', '1').exists()
 
 
-def test_unconfirmed_upload_retries_once_then_is_in_total_ledger(tmp_path, monkeypatch):
+def test_unconfirmed_upload_is_not_retried_and_is_in_total_ledger(tmp_path, monkeypatch):
     import csv
     from clm.reports import create_total_report
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
@@ -142,32 +142,12 @@ def test_unconfirmed_upload_retries_once_then_is_in_total_ledger(tmp_path, monke
         def get_by_role(self, *args, **kwargs): return Next()
     events = []
     assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set(), events.append) == 0
-    assert calls == [False, True]
-    assert events[-1]['attempts'] == events[-1]['max_attempts'] == 2
+    assert calls == [False]
+    assert events[-1]['attempts'] == events[-1]['max_attempts'] == 1
     assert not (tmp_path / 'pending' / '1.json').exists()
     with create_total_report('Zona Sur').open(encoding='utf-8-sig', newline='') as stream:
         row = next(csv.DictReader(stream))
     assert row['status'] == 'upload unconfirmed'
-    assert row['attempts'] == '2'
+    assert row['attempts'] == '1'
     assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 0
-    assert calls == [False, True]
-
-
-def test_unconfirmed_first_upload_can_succeed_on_second(tmp_path, monkeypatch):
-    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
-    monkeypatch.setattr(fileparts, 'select_search', lambda *args: None)
-    monkeypatch.setattr(fileparts, 'page_results', lambda page: [('a.pdf', 'https://example.test/?Id=1')])
-    calls = []
-    def process(*args, **kwargs):
-        calls.append(kwargs.get('retry_unconfirmed', False))
-        if len(calls) == 1:
-            raise fileparts.UploadUnconfirmed('not confirmed')
-        return '1'
-    monkeypatch.setattr(fileparts, 'process_document', process)
-    class Next:
-        def count(self): return 0
-    class Page:
-        url = 'https://example.test/search'
-        def get_by_role(self, *args, **kwargs): return Next()
-    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 1
-    assert calls == [False, True]
+    assert calls == [False]

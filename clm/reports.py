@@ -136,3 +136,9 @@ def create_total_report(zone):
     except FileExistsError as exc:
         raise ValueError('A total ledger already exists locally. Reconcile it before retrying.') from exc
     return target
+
+
+def total_report_issue_count(report_path):
+    """Count unresolved rows in the exact ledger uploaded to DocuSign."""
+    with report_path.open(encoding='utf-8-sig', newline='') as stream:
+        return sum(row['status'] != 'processed' for row in csv.DictReader(stream))

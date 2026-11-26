@@ -13,7 +13,11 @@ import time
 RETENTION_SECONDS = 4 * 60 * 60
 MAX_ATTEMPTS = 4  # More than three attempts means four total attempts.
 UPLOAD_CONFIRM_SECONDS = 45
-MAX_UNCONFIRMED_UPLOADS = 2
+DOWNLOAD_RETRY_SECONDS = 10 * 60
+
+
+class DownloadFailed(ValueError):
+    """All permitted download attempts failed and were recorded."""
 
 
 class UploadUnconfirmed(ValueError):
@@ -63,7 +67,7 @@ def record_failure(zone, document_id, name, url, reason, *, unconfirmed=False):
              'document_url': url, 'attempts': previous.get('attempts', 0) + 1,
              'reason': str(reason), 'last_attempt_at': datetime.now(timezone.utc).isoformat()}
     if unconfirmed:
-        entry.update(status='upload unconfirmed', upload_attempts=MAX_UNCONFIRMED_UPLOADS)
+        entry.update(status='upload unconfirmed', upload_attempts=1)
     fd, temp = tempfile.mkstemp(dir=path.parent, prefix='.attempt-')
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as stream:
@@ -88,6 +92,61 @@ def cleanup_expired(now=None):
                 shutil.rmtree(marker.parent)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print(f'Unable to clean retained download {marker.parent.name}: {type(exc).__name__}', flush=True)
+
+
+def cleanup_confirmed_downloads():
+    """Free local copies only when a successful upload has a valid marker."""
+    root = data_dir() / 'downloads'
+    for marker in root.glob('*/delete-after.json'):
+        try:
+            entry = json.loads(marker.read_text(encoding='utf-8'))
+            if not isinstance(entry['delete_after'], (int, float)):
+                continue
+            shutil.rmtree(marker.parent)
+        except FileNotFoundError:
+            continue
+        except (ValueError, KeyError, TypeError):
+            continue
+
+
+def download_for_upload(document, actions, name, zone, document_id, url, report):
+    """Retry this document in place, preserving unconfirmed uploads on disk."""
+    previous = read_attempt(zone, document_id) or {}
+    for _ in range(previous.get('attempts', 0), MAX_ATTEMPTS):
+        folder = None
+        download = None
+        try:
+            actions.click()
+            with document.expect_download(timeout=60000) as event:
+                document.get_by_role('menuitem', name='Download file').click()
+            download = event.value
+            if download.failure():
+                raise ValueError('The browser could not download the document.')
+            root = data_dir() / 'downloads'
+            root.mkdir(parents=True, exist_ok=True)
+            folder = Path(tempfile.mkdtemp(prefix='document-', dir=root))
+            path = folder / Path(download.suggested_filename).name
+            download.save_as(str(path))
+            if not path.stat().st_size:
+                raise ValueError('Downloaded document is empty.')
+            download.delete()
+            return folder, path
+        except Exception as exc:
+            if download is not None:
+                try:
+                    download.delete()
+                except Exception:
+                    pass
+            if folder is not None:
+                shutil.rmtree(folder, ignore_errors=True)
+            cleanup_confirmed_downloads()
+            failure = record_failure(zone, document_id, name, url,
+                                     f'Download failed: {type(exc).__name__}')
+            if failure['attempts'] >= MAX_ATTEMPTS:
+                raise DownloadFailed(failure['reason']) from exc
+            report(f"Download failed for {name} (attempt {failure['attempts']} of {MAX_ATTEMPTS}). Waiting 10 minutes before retrying.")
+            time.sleep(DOWNLOAD_RETRY_SECONDS)
+    raise DownloadFailed('Download attempts exhausted.')
 
 
 def start_cleanup_worker():
@@ -147,16 +206,14 @@ def page_results(page):
     return [(link.inner_text().strip(), link.get_attribute('href')) for link in links.all()]
 
 
-def process_document(page, name, url, zone, report, snapshot, journal=None, *, retry_unconfirmed=False):
+def process_document(page, name, url, zone, report, snapshot, journal=None):
     from playwright.sync_api import TimeoutError as Timeout
     document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
     if not document_id:
         raise ValueError('A search result has no document ID.')
     pending = data_dir() / 'pending' / (document_id + '.json')
-    if pending.exists() and not retry_unconfirmed:
+    if pending.exists():
         raise ValueError(f'An earlier upload for {name} has an uncertain outcome. Check CLM before retrying.')
-    if retry_unconfirmed and not pending.exists():
-        raise ValueError('The previous upload record is missing. Reconcile before retrying.')
     document = page.context.new_page()
     folder = None
     try:
@@ -176,20 +233,7 @@ def process_document(page, name, url, zone, report, snapshot, journal=None, *, r
             raise ValueError(f'Could not determine the DocuSign path for {name}.')
         docusign_path = '/'.join(part.strip() for part in folders if part.strip())
         actions = document.locator('[aria-label="Actions"]')
-        actions.click()
-        with document.expect_download(timeout=60000) as event:
-            document.get_by_role('menuitem', name='Download file').click()
-        download = event.value
-        if download.failure():
-            raise ValueError('Document download failed.')
-        root = data_dir() / 'downloads'
-        root.mkdir(parents=True, exist_ok=True)
-        folder = Path(tempfile.mkdtemp(prefix='document-', dir=root))
-        path = folder / Path(download.suggested_filename).name
-        download.save_as(str(path))
-        download.delete()
-        if not path.stat().st_size:
-            raise ValueError('Downloaded document is empty.')
+        folder, path = download_for_upload(document, actions, name, zone, document_id, url, report)
         report(f'Uploading: {name}')
         actions.click()
         document.get_by_role('menuitem', name='Upload new version').click()
@@ -199,7 +243,7 @@ def process_document(page, name, url, zone, report, snapshot, journal=None, *, r
         # Keep the record durable before submitting; a crash must not silently retry.
         with pending.open('w', encoding='utf-8') as stream:
             json.dump({'document_id': document_id, 'name': name, 'url': url,
-                       'upload_attempt': 2 if retry_unconfirmed else 1}, stream)
+                       'upload_attempt': 1}, stream)
             stream.flush()
             os.fsync(stream.fileno())
         deadline = time.monotonic() + UPLOAD_CONFIRM_SECONDS
@@ -224,6 +268,9 @@ def process_document(page, name, url, zone, report, snapshot, journal=None, *, r
         return document_id
     finally:
         document.close()
+        # A copy is needed only after confirmation or when submission is uncertain.
+        if folder is not None and not pending.exists() and not (folder / 'delete-after.json').exists():
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 def process_zone(page, report, snapshot, zone, known, event=None):
@@ -265,22 +312,26 @@ def process_zone(page, report, snapshot, zone, known, event=None):
                 if event:
                     event({'type': 'document_started', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at})
                 try:
-                    try:
-                        processed = process_document(page, name, url, zone, report, snapshot, journal)
-                    except UploadUnconfirmed:
-                        report(f'Upload not confirmed for {name}; retrying once.')
-                        processed = process_document(page, name, url, zone, report, snapshot, journal,
-                                                     retry_unconfirmed=True)
+                    processed = process_document(page, name, url, zone, report, snapshot, journal)
+                except DownloadFailed as exc:
+                    failed = read_attempt(zone, document_id)
+                    exhausted_seen = True
+                    report(f"Could not download {name} after {failed['attempts']} attempts.")
+                    if event:
+                        event({'type': 'document_failed', 'document_id': document_id, 'name': name,
+                               'url': url, 'started_at': started_at, 'attempts': failed['attempts'],
+                               'max_attempts': MAX_ATTEMPTS, 'reason': str(exc)})
+                    continue
                 except UploadUnconfirmed as exc:
                     failed = record_failure(zone, document_id, name, url, exc, unconfirmed=True)
                     # The failure record is durable before removing the pending marker.
                     (data_dir() / 'pending' / (document_id + '.json')).unlink()
                     exhausted_seen = True
-                    report(f'Upload of {name} unconfirmed after two attempts.')
+                    report(f'Upload of {name} unconfirmed; check DocuSign before retrying.')
                     if event:
                         event({'type': 'document_failed', 'document_id': document_id, 'name': name,
-                               'url': url, 'started_at': started_at, 'attempts': 2,
-                               'max_attempts': 2, 'reason': str(exc)})
+                               'url': url, 'started_at': started_at, 'attempts': 1,
+                               'max_attempts': 1, 'reason': str(exc)})
                     continue
                 except ValueError as exc:
                     # Once an upload is submitted, its outcome must be reconciled by a person.

@@ -26,6 +26,7 @@ class Fake:
         event({"type": "document_started", "document_id": "2", "name": "b<i>.pdf", "url": URL + "2", "started_at": "2026-07-01T10:00:06+00:00"})
         event({"type": "document_failed", "document_id": "2", "name": "b<i>.pdf", "url": URL + "2", "started_at": "2026-07-01T10:00:06+00:00", "attempts": 2, "reason": "Download failed"})
         event({"type": "ledger_uploaded", "name": "REPORT ZONA SUR 1 12:00.csv", "uploaded_at": "2026-07-01T10:01:00+00:00"})
+        event({"type": "ledger_uploaded", "name": "ZONA SUR - TOTAL LEDGER.csv", "uploaded_at": "2026-07-01T10:02:00+00:00", "issue_count": 1})
         if Fake.mode == "run_fail":
             raise ValueError("Upload outcome uncertain.")
         return 1
@@ -60,7 +61,7 @@ def test_sign_in_then_process_shows_real_rows(monkeypatch):
     assert "—" in page  # missing path
     assert "b&lt;i&gt;.pdf" in page and "Download failed (attempt 2 of 4)" in page
     assert "REPORT ZONA SUR 1 12:00.csv" in page and "12:01:00 CEST" in page
-    assert "1 processed. Complete" in page
+    assert "1 processed. Complete with issues" in page
     assert [b.label for b in at.button] == ["Sign in again"]
 
 

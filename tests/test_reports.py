@@ -106,3 +106,26 @@ def test_progress_events_follow_document_and_report_confirmation(tmp_path, monke
     assert [e['type'] for e in events] == ['document_started', 'document_finished', 'upload_confirmed', 'ledger_uploaded']
     assert events[1]['docusign_path'] == 'CLIENTS/SPAIN/Zona Sur/A'
     assert events[1]['started_at'] == events[0]['started_at']
+
+
+def test_total_ledger_includes_success_failure_and_uncertain_upload(tmp_path, monkeypatch):
+    import json
+    from clm.fileparts import record_failure, record_processed
+    from clm.reports import create_total_report, total_report_issue_count
+
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    record_processed('1', 'success.pdf', 'Zona Sur', 'https://example.test/1', 'CLIENTS/SPAIN/Zona Sur')
+    for _ in range(4):
+        record_failure('Zona Sur', '2', 'failed.pdf', 'https://example.test/2', 'Download failed')
+    record_failure('Zona Sur', '3', 'uncertain.pdf', 'https://example.test/3', 'No confirmation', unconfirmed=True)
+    record_failure('Zona Norte', '4', 'other.pdf', 'https://example.test/4', 'No confirmation', unconfirmed=True)
+    report = create_total_report('Zona Sur')
+    with report.open(encoding='utf-8-sig', newline='') as stream:
+        rows = {row['document_id']: row for row in csv.DictReader(stream)}
+    assert set(rows) == {'1', '2', '3'}
+    assert rows['1']['status'] == 'processed'
+    assert rows['2']['status'] == 'could not be processed'
+    assert rows['2']['reason'] == 'Download failed' and rows['2']['attempts'] == '4'
+    assert rows['3']['status'] == 'upload unconfirmed'
+    assert rows['3']['reason'] == 'No confirmation'
+    assert total_report_issue_count(report) == 2
