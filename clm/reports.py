@@ -4,6 +4,7 @@ import json
 import os
 import re
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from clm.fileparts import data_dir
 
@@ -45,3 +46,41 @@ def create_page_report(zone, entries):
         # Preserve the reserved sequence if a partially written file exists.
         raise
     return target
+
+REPORT_FOLDERS = ('Users', 'Internal', 'Registro correcciones filepart')
+
+
+def upload_report(search_page, report_path, report, snapshot):
+    """Upload from an independent tab, stopping if the result is ambiguous."""
+    page = search_page.context.new_page()
+    try:
+        parts = urlsplit(search_page.url)
+        account = parse_qs(parts.query).get('aid', [])
+        if not account:
+            raise ValueError('The search page has no DocuSign account ID.')
+        documents_url = urlunsplit((parts.scheme, parts.netloc, '/atlas/Documents/BrowseDocuments.aspx',
+                                   urlencode({'aid': account[0]}), ''))
+        page.goto(documents_url, wait_until='domcontentloaded')
+        def dismiss():
+            close = page.locator('#walkthrough button.ux-modal__close')
+            if close.is_visible():
+                close.click(force=True)
+        dismiss()
+        page.locator('a[aria-label^="Navigate to folder "]').first.wait_for(timeout=30000)
+        for folder in REPORT_FOLDERS:
+            dismiss()
+            page.get_by_role('row').get_by_role('link', name=folder, exact=True).click(timeout=30000)
+            page.locator('a[aria-label="Navigate to folder ' + folder + '"]').wait_for(timeout=30000)
+        snapshot(page)
+        existing = page.get_by_role('row').get_by_role('link', name=report_path.name, exact=True)
+        if existing.count():
+            raise ValueError(f'Report {report_path.name} already exists in DocuSign. Check it before continuing.')
+        report(f'Uploading report {report_path.name}.')
+        page.get_by_role('menuitem', name='File', exact=True).click()
+        page.locator('li.fileUploadButton input[type=file]').set_input_files(str(report_path))
+        existing.wait_for(timeout=120000)
+        state = report_path.parent / 'state.json'
+        state.write_text(json.dumps({'status': 'uploaded', 'filename': report_path.name}), encoding='utf-8')
+        snapshot(page)
+    finally:
+        page.close()

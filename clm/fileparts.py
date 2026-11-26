@@ -20,12 +20,13 @@ def history_path():
     return Path(os.environ.get('CLM_HISTORY_PATH', str(data_dir() / 'processed.jsonl')))
 
 
-def record_processed(document_id, name, zone):
+def record_processed(document_id, name, zone, url=None, docusign_path=None, processed_at=None):
     path = history_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a', encoding='utf-8') as out:
         out.write(json.dumps({'document_id': document_id, 'name': name, 'zone': zone,
-                              'processed_at': datetime.now(timezone.utc).isoformat()}, ensure_ascii=False) + '\n')
+                              'processed_at': processed_at or datetime.now(timezone.utc).isoformat(), 'document_url': url,
+                              'docusign_path': docusign_path}, ensure_ascii=False) + '\n')
 
 
 def processed_ids():
@@ -106,7 +107,7 @@ def page_results(page):
     return [(link.inner_text().strip(), link.get_attribute('href')) for link in links.all()]
 
 
-def process_document(page, name, url, zone, report, snapshot):
+def process_document(page, name, url, zone, report, snapshot, journal=None):
     from playwright.sync_api import TimeoutError as Timeout
     document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
     if not document_id:
@@ -119,6 +120,19 @@ def process_document(page, name, url, zone, report, snapshot):
     try:
         document.goto(url, wait_until='domcontentloaded')
         snapshot(document)
+        breadcrumb = document.get_by_role('navigation', name='Breadcrumb')
+        overflow = breadcrumb.get_by_role('button', name='Ancestor subfolders overflow menu')
+        folders = []
+        if overflow.is_visible():
+            overflow.click()
+            folders = document.get_by_role('menu', name='Ancestor subfolders overflow menu').get_by_role('menuitem').all_text_contents()
+            overflow.click()
+        else:
+            folders = [text.strip() for text in breadcrumb.locator('li').all_text_contents() if text.strip()]
+            folders = [part for part in folders if part != name]
+        if not folders:
+            raise ValueError(f'Could not determine the DocuSign path for {name}.')
+        docusign_path = '/'.join(part.strip() for part in folders if part.strip())
         actions = document.locator('[aria-label="Actions"]')
         actions.click()
         with document.expect_download(timeout=60000) as event:
@@ -148,7 +162,15 @@ def process_document(page, name, url, zone, report, snapshot):
         except Timeout as exc:
             raise ValueError(f'Upload outcome for {name} is uncertain. Check CLM before retrying.') from exc
         mark_for_deletion(folder)
-        record_processed(document_id, name, zone)
+        processed_at = datetime.now(timezone.utc).isoformat()
+        entry = {'zone': zone, 'filename': name, 'docusign_path': docusign_path,
+                 'document_url': url, 'document_id': document_id, 'processed_at': processed_at}
+        if journal is not None:
+            with journal.open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps(entry, ensure_ascii=False) + '\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+        record_processed(document_id, name, zone, url, docusign_path, processed_at)
         pending.unlink()
         snapshot(document)
         return document_id
@@ -161,6 +183,12 @@ def process_zone(page, report, snapshot, zone, known):
     select_search(page, report, zone)
     search_url = page.url
     total = 0
+    journal_dir = data_dir() / 'page-journals'
+    journal_dir.mkdir(parents=True, exist_ok=True)
+    import hashlib
+    journal = journal_dir / (hashlib.sha256(zone.encode()).hexdigest() + '.jsonl')
+    if journal.exists():
+        raise ValueError(f'An unfinished page report exists for {zone}; reconcile it before retrying.')
     while True:
         batch_new = 0
         while True:
@@ -175,9 +203,15 @@ def process_zone(page, report, snapshot, zone, known):
                 if document_id in known:
                     continue
                 report(f'Processing {name}')
-                known.add(process_document(page, name, url, zone, report, snapshot))
+                known.add(process_document(page, name, url, zone, report, snapshot, journal))
                 batch_new += 1
                 total += 1
+            if journal.exists():
+                from clm.reports import create_page_report, upload_report
+                entries = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines() if line.strip()]
+                report_path = create_page_report(zone, entries)
+                upload_report(page, report_path, report, snapshot)
+                journal.unlink()
             next_page = page.get_by_role('button', name='Go to next page')
             if not next_page.count() or next_page.is_disabled():
                 break
