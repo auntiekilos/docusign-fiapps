@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLM progress, macOS mockup</title>
+<style>
+:root{
+  color-scheme: light dark;
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  --label:#1f2328; --label2:#6a6f76; --label3:#9a9fa6;
+  --tint:#3b6fd4; --green:#3c8a4e; --amber:#a8741a;
+  --win:#f6f6f4; --bar:#ebebe8; --term:#fbfbfa; --sep:rgba(0,0,0,.1); --fill:rgba(0,0,0,.07);
+  --edge:rgba(0,0,0,.16); --shadow:0 18px 44px -14px rgba(0,0,0,.28),0 3px 8px rgba(0,0,0,.08);
+  --wall:linear-gradient(160deg,#d9dde3,#c9ced6);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --label:#d8dade; --label2:#8b9099; --label3:#5d626b;
+    --tint:#6b9be8; --green:#7fb88a; --amber:#d1a85a;
+    --win:#262a30; --bar:#2d3138; --term:#1f2328; --sep:rgba(255,255,255,.08); --fill:rgba(255,255,255,.08);
+    --edge:rgba(255,255,255,.14); --shadow:0 18px 44px -14px rgba(0,0,0,.7),0 3px 8px rgba(0,0,0,.35);
+    --wall:linear-gradient(160deg,#2b3038,#1a1d22);
+  }
+}
+*{box-sizing:border-box;margin:0}
+html{background:var(--wall);min-height:100%}
+body{font:13px/1.45 var(--font);color:var(--label);padding:20px 16px;-webkit-font-smoothing:antialiased}
+main{max-width:696px;margin:0 auto;display:flex;flex-direction:column;gap:26px}
+.cap{font:11.5px var(--mono);color:var(--label2);text-align:center;margin-top:10px}
+.win{height:420px;display:flex;flex-direction:column;overflow:hidden;border-radius:10px;background:var(--win);border:.5px solid var(--edge);box-shadow:var(--shadow)}
+.tb{height:38px;flex:none;display:flex;align-items:center;padding:0 14px;background:var(--bar);border-bottom:.5px solid var(--sep);position:relative}
+.dots{display:flex;gap:8px}
+.dots i{width:12px;height:12px;border-radius:50%;border:.5px solid rgba(0,0,0,.18)}
+.dots i:nth-child(1){background:#ff5f57}.dots i:nth-child(2){background:#febc2e}.dots i:nth-child(3){background:#28c840}
+.tb .ttl{position:absolute;left:0;right:0;text-align:center;font:500 12px var(--mono);pointer-events:none}
+.tb .ttl small{display:block;font-weight:400;font-size:10.5px;color:var(--label2);line-height:1.1}
+.tb .ttl.one{line-height:38px}
+.cont{flex:1;min-height:0;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+.center{align-items:center;justify-content:center}
+.h{font:600 10.5px var(--mono);color:var(--label2);text-transform:uppercase;letter-spacing:.8px;margin:0 2px -6px}
+.card{background:var(--term);border:.5px solid var(--sep);border-radius:7px}
+.pad{padding:12px 14px}
+.row{display:flex;align-items:center;gap:10px;padding:9px 14px;min-height:40px}
+.row+.row{border-top:.5px solid var(--sep)}
+.row .t{flex:1;min-width:0}
+.row .t b{font-weight:500;display:block;font-size:13px}
+.row .t span{font:11.5px var(--mono);color:var(--label2)}
+.row .v{color:var(--label2);font:12px var(--mono);white-space:nowrap}
+.ic{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;color:var(--label2);font-size:13px;flex:none;background:var(--fill)}
+/* understated glass button: flat tint, soft top highlight, hairline edge, no gloss */
+.btn{font:500 13px var(--font);color:#fff;border:0;cursor:pointer;padding:6px 18px;border-radius:999px;
+  background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(255,255,255,0)),var(--tint);
+  box-shadow:0 1px 2px rgba(0,0,0,.18),inset 0 .5px 0 rgba(255,255,255,.45),inset 0 0 0 .5px rgba(0,0,0,.12);
+  transition:filter .15s}
+.btn:hover{filter:brightness(1.06)}
+.btn:active{filter:brightness(.94)}
+.btn:focus-visible{outline:2px solid color-mix(in srgb,var(--tint) 70%,transparent);outline-offset:2px}
+.btn.big{font-size:14px;padding:8px 30px}
+.btn.off{color:var(--label2);cursor:default;background:var(--fill);box-shadow:inset 0 0 0 .5px var(--sep)}
+.btn.off:hover,.btn.off:active{filter:none}
+.foot{flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 20px;border-top:.5px solid var(--sep);background:var(--bar)}
+.note{font-size:11.5px;color:var(--label2)}
+.foot .note{font-family:var(--mono);font-size:11px}
+.bar{height:4px;border-radius:2px;background:var(--fill);overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--tint)}
+.chk{width:16px;height:16px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:9px;color:var(--term);background:var(--green)}
+.chk.run{background:none;border:2px solid var(--fill);border-top-color:var(--tint)}
+.pill{font:500 11px var(--mono);padding:1px 7px;border-radius:4px;background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green)}
+.pill.t{background:color-mix(in srgb,var(--tint) 16%,transparent);color:var(--tint)}
+.log{font:11.5px/1.6 var(--mono);padding:10px 14px}
+.log div{display:flex;gap:10px}
+.log time{color:var(--label3);flex:none}
+.log .dim{color:var(--label2)}
+.split{flex:1;min-height:0;display:flex;gap:12px}
+.split>*{min-width:0}
+.shot{flex:1;border-radius:7px;background:repeating-linear-gradient(0deg,var(--fill) 0 10px,transparent 10px 20px);border:.5px solid var(--sep);display:grid;place-items:center;font:11.5px var(--mono);color:var(--label2);text-align:center;padding:0 8px}
+</style>
+</head>
+<body>
+<main>
+
+<!-- 1. Initial -->
+<section>
+<div class="win">
+  <div class="tb"><div class="dots"><i></i><i></i><i></i></div></div>
+  <div class="cont center"><button class="btn big">Run setup</button></div>
+</div>
+<p class="cap">1. Initial window</p>
+</section>
+
+<!-- 2. Install progress -->
+<section>
+<div class="win">
+  <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">Installing<small>DocuSign CLM</small></div></div>
+  <div class="cont">
+    <div class="card">
+      <div class="row"><span class="chk">&#10003;</span><div class="t"><b>Streamlit</b><span>Installed</span></div><span class="v">4.1 s</span></div>
+      <div class="row"><span class="chk">&#10003;</span><div class="t"><b>Playwright 1.57.0</b><span>Installed</span></div><span class="v">6.8 s</span></div>
+      <div class="row" style="align-items:flex-start"><span class="chk run" style="margin-top:2px"></span>
+        <div class="t"><b>Chromium headless shell</b><span>Downloading, 64 of 112 MB</span><div class="bar"><i style="width:57%"></i></div></div><span class="v">57%</span></div>
+    </div>
+    <p class="h">Output</p>
+    <div class="card log">
+      <div><time>09:42:03</time><span>pip install streamlit</span></div>
+      <div><time>09:42:08</time><span>pip install playwright==1.57.0</span></div>
+      <div><time>09:42:15</time><span>playwright install chromium-headless-shell</span></div>
+      <div class="dim"><time>09:42:17</time><span>Downloading 64 / 112 MB</span></div>
+    </div>
+  </div>
+  <div class="foot"><span class="note">About 20 seconds left.</span><button class="btn off">Installing...</button></div>
+</div>
+<p class="cap">2. Setup install progress</p>
+</section>
+
+<!-- 3. Ready / zone -->
+<section>
+<div class="win">
+  <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">Process<small>Signed in to DocuSign CLM</small></div></div>
+  <div class="cont">
+    <p class="h">Configured zone</p>
+    <div class="card">
+      <div class="row"><div class="ic">&#9906;</div><div class="t"><b>Zona Sur</b><span>From CLM_ZONES</span></div><span class="pill">Ready</span></div>
+    </div>
+    <p class="note" style="padding:0 4px">The zone comes from the server environment. Change it there, not in the app.</p>
+    <p class="h" style="margin-top:4px">Last run</p>
+    <div class="card">
+      <div class="row"><div class="t"><b>Documents processed</b><span>Yesterday, 17:20</span></div><span class="v">38</span></div>
+      <div class="row"><div class="t"><b>Needed review</b><span>Skipped, no match</span></div><span class="v">2</span></div>
+    </div>
+  </div>
+  <div class="foot"><span class="note">Each filepart uploads as a new version.</span><button class="btn">Process Zona Sur</button></div>
+</div>
+<p class="cap">3. Ready, one configured zone</p>
+</section>
+
+<!-- 4. Processing -->
+<section>
+<div class="win">
+  <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">Processing<small>Zona Sur</small></div></div>
+  <div class="cont">
+    <div class="card pad">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-weight:600">Filepart 12 of 40</b><span class="pill t">Running</span></div>
+      <div class="bar"><i style="width:30%"></i></div>
+      <p style="color:var(--label2);font-size:11.5px;margin-top:7px">Uploading NDA_793663_&amp; OTHER STORIES.docx</p>
+    </div>
+    <div class="split">
+      <div class="shot">Browser view, fields masked</div>
+      <div style="flex:1.3;display:flex;flex-direction:column;gap:6px">
+        <p class="h" style="margin-bottom:0">Activity</p>
+        <div class="card log" style="flex:1;overflow:hidden">
+          <div><time>09:44:02</time><span>Searching Zona Sur</span></div>
+          <div><time>09:44:09</time><span>Page 1, 25 results</span></div>
+          <div><time>09:44:15</time><span>Downloaded filepart 11</span></div>
+          <div><time>09:44:21</time><span>Uploaded version 11</span></div>
+          <div><time>09:44:24</time><span>Downloaded filepart 12</span></div>
+          <div class="dim"><time>09:44:30</time><span>Uploading filepart 12...</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="cap">4. Processing and activity</p>
+</section>
+
+</main>
+</body>
+</html>

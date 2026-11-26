@@ -1,6 +1,8 @@
 """Create durable, numbered page reports before transferring them to CLM."""
 import csv
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
 import re
 from pathlib import Path
@@ -32,7 +34,10 @@ def create_page_report(zone, entries):
             break
         except FileExistsError:
             number += 1
-    filename = f'REPORT {safe_zone.upper()} {number}.csv'
+    last_time = datetime.fromisoformat(entries[-1]['processed_at'].replace('Z', '+00:00'))
+    if last_time.tzinfo is None:
+        raise ValueError('Report timestamps must include a timezone.')
+    filename = f"REPORT {safe_zone.upper()} {number} {last_time.astimezone(ZoneInfo('Europe/Madrid')):%H:%M}.csv"
     target = folder / filename
     try:
         with target.open('x', encoding='utf-8-sig', newline='') as stream:
@@ -84,3 +89,50 @@ def upload_report(search_page, report_path, report, snapshot):
         snapshot(page)
     finally:
         page.close()
+
+
+def create_total_report(zone):
+    """Create a durable total ledger from the recorded history for this zone."""
+    from clm.fileparts import history_path, MAX_ATTEMPTS
+    for folder in ('pending', 'page-journals'):
+        directory = data_dir() / folder
+        if directory.exists() and any(directory.iterdir()):
+            raise ValueError('Unfinished processing records exist. Reconcile them before creating the total ledger.')
+    path = history_path()
+    items = []
+    if path.exists():
+        for line in path.read_text(encoding='utf-8').splitlines():
+            if line.strip():
+                item = json.loads(line)
+                if item.get('zone') == zone:
+                    items.append({**item, 'filename': item.get('name')})
+    if any(any(not item.get(field) for field in FIELDS) for item in items):
+        raise ValueError('History has incomplete records. Reconcile them before creating the total ledger.')
+    for item in items:
+        item['status'] = 'processed'
+    completed_ids = {item['document_id'] for item in items}
+    attempts_dir = data_dir() / 'attempts'
+    if attempts_dir.exists():
+        for file in attempts_dir.glob('*.json'):
+            failure = json.loads(file.read_text(encoding='utf-8'))
+            if (failure['zone'] == zone and (failure.get('status') == 'upload unconfirmed' or failure['attempts'] >= MAX_ATTEMPTS)
+                    and failure['document_id'] not in completed_ids):
+                items.append({**failure, 'status': failure.get('status', 'could not be processed'),
+                              'attempts': failure.get('upload_attempts', failure['attempts']),
+                              'processed_at': failure['last_attempt_at']})
+    safe_zone = re.sub(r'[^\w .-]', '_', zone, flags=re.UNICODE).strip(' .')
+    if not safe_zone:
+        raise ValueError('Zone name cannot be used in a report filename.')
+    root = data_dir() / 'total-reports' / safe_zone
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f'{safe_zone.upper()} - TOTAL LEDGER.csv'
+    try:
+        with target.open('x', encoding='utf-8-sig', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=(*FIELDS, 'status', 'attempts', 'reason'), extrasaction='ignore')
+            writer.writeheader()
+            writer.writerows(items)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as exc:
+        raise ValueError('A total ledger already exists locally. Reconcile it before retrying.') from exc
+    return target

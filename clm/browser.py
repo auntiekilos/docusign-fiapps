@@ -4,6 +4,7 @@ from queue import Empty, Queue
 from threading import Thread
 from urllib.parse import urlsplit
 import os
+from datetime import datetime, timezone
 import subprocess
 import sys
 import time
@@ -148,6 +149,9 @@ def launch_browser(playwright, report=log_status):
         raise ValueError("The headless browser could not start. Check the host's Chromium installation and system libraries.") from exc
 
 
+REINDEX_WAIT_SECONDS = 10 * 60
+
+
 class BrowserSession:
     def __init__(self):
         self._commands = Queue()
@@ -205,30 +209,82 @@ class BrowserSession:
                 screenshot(value)
         return future.result()
 
-    def process_filepart(self, progress=None, screenshot=None):
+    def _operation(self, name, progress=None, screenshot=None, event=None):
         future, updates = Future(), Queue()
-        self._commands.put(("filepart", future, updates))
-        while not future.done():
+        self._commands.put((name, future, updates))
+        while not future.done() or not updates.empty():
             try:
                 kind, value = updates.get(timeout=0.5)
                 if kind == "progress" and progress:
                     progress(value)
                 elif kind == "screenshot" and screenshot and value:
                     screenshot(value)
+                elif kind == "event" and event:
+                    event(value)
             except Empty:
                 pass
-        while not updates.empty():
-            kind, value = updates.get_nowait()
-            if kind == "progress" and progress:
-                progress(value)
-            elif kind == "screenshot" and screenshot and value:
-                screenshot(value)
         return future.result()
+
+    def process_filepart(self, progress=None, screenshot=None, event=None):
+        from clm.fileparts import configured_zones
+        configured_zones()
+        total = 0
+        try:
+            while True:
+                count = self._operation("filepart", progress, screenshot, event)
+                if count > 0:
+                    total += count
+                if count == 0:
+                    self._operation("total", progress, screenshot, event)
+                    return total
+                if progress:
+                    progress("Waiting 10 minutes for DocuSign before a clean search.")
+                time.sleep(REINDEX_WAIT_SECONDS)
+                self._operation("close", progress, screenshot)
+                if progress:
+                    progress("Restarting browser for a clean search.")
+                result, image = self.login(os.environ.get("CLM_URL", ""), progress)
+                if screenshot and image:
+                    screenshot(image)
+                if result != "signed_in":
+                    raise ValueError("Sign-in not confirmed after browser restart.")
+        finally:
+            self._operation("close", progress, screenshot)
 
     def _run(self):
         playwright = browser = context = None
         while True:
             command = self._commands.get()
+            if len(command) == 3 and command[0] == "close":
+                _, future, updates = command
+                try:
+                    if context is not None:
+                        context.close()
+                    if browser is not None:
+                        browser.close()
+                    context = browser = None
+                    future.set_result(None)
+                except Exception as exc:
+                    future.set_exception(ValueError("Could not close the browser session."))
+                continue
+            if len(command) == 3 and command[0] == "total":
+                _, future, updates = command
+                try:
+                    if context is None or browser is None or not browser.is_connected():
+                        raise ValueError("Sign in before uploading the total ledger.")
+                    from clm.fileparts import configured_zones
+                    from clm.reports import create_total_report, upload_report
+                    zone = configured_zones()[0]
+                    page = context.pages[0]
+                    report_path = create_total_report(zone)
+                    upload_report(page, report_path, lambda value: updates.put(("progress", value)),
+                                  lambda current: updates.put(("screenshot", page_image(current))))
+                    updates.put(("event", {"type": "ledger_uploaded", "name": report_path.name, "uploaded_at": datetime.now(timezone.utc).isoformat()}))
+                    future.set_result(None)
+                except Exception as exc:
+                    future.set_exception(ValueError(str(exc) if isinstance(exc, ValueError) else
+                        "Total ledger upload could not be confirmed. Reconcile it before retrying."))
+                continue
             if len(command) == 3 and command[0] == "filepart":
                 _, future, updates = command
                 try:
@@ -237,7 +293,8 @@ class BrowserSession:
                     from clm.fileparts import process_one
                     page = context.pages[0]
                     result = process_one(page, lambda value: updates.put(("progress", value)),
-                                         lambda current: updates.put(("screenshot", page_image(current))))
+                                         lambda current: updates.put(("screenshot", page_image(current))),
+                                         event=lambda value: updates.put(("event", value)))
                     future.set_result(result)
                 except Exception as exc:
                     future.set_exception(ValueError(str(exc) if isinstance(exc, ValueError) else

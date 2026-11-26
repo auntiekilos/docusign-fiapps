@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 import json
+import hashlib
 import os
 import shutil
 import tempfile
@@ -10,6 +11,13 @@ import threading
 import time
 
 RETENTION_SECONDS = 4 * 60 * 60
+MAX_ATTEMPTS = 4  # More than three attempts means four total attempts.
+UPLOAD_CONFIRM_SECONDS = 45
+MAX_UNCONFIRMED_UPLOADS = 2
+
+
+class UploadUnconfirmed(ValueError):
+    """The upload was submitted but its outcome was not confirmed."""
 
 
 def data_dir():
@@ -35,6 +43,38 @@ def processed_ids():
         return set()
     return {json.loads(line)['document_id'] for line in path.read_text(encoding='utf-8').splitlines() if line.strip()}
 
+
+
+def attempt_path(zone, document_id):
+    key = hashlib.sha256((zone + "\0" + document_id).encode()).hexdigest()
+    return data_dir() / 'attempts' / (key + '.json')
+
+
+def read_attempt(zone, document_id):
+    path = attempt_path(zone, document_id)
+    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
+
+
+def record_failure(zone, document_id, name, url, reason, *, unconfirmed=False):
+    path = attempt_path(zone, document_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous = read_attempt(zone, document_id) or {}
+    entry = {'zone': zone, 'document_id': document_id, 'filename': name,
+             'document_url': url, 'attempts': previous.get('attempts', 0) + 1,
+             'reason': str(reason), 'last_attempt_at': datetime.now(timezone.utc).isoformat()}
+    if unconfirmed:
+        entry.update(status='upload unconfirmed', upload_attempts=MAX_UNCONFIRMED_UPLOADS)
+    fd, temp = tempfile.mkstemp(dir=path.parent, prefix='.attempt-')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(entry, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+    return entry
 
 def cleanup_expired(now=None):
     now = time.time() if now is None else now
@@ -69,8 +109,8 @@ def configured_zones():
     zones = [zone.strip() for zone in raw.split(',') if zone.strip()]
     if not zones:
         raise ValueError('Set CLM_ZONES to a comma-separated list of zone folder names.')
-    if len(set(zones)) != len(zones):
-        raise ValueError('CLM_ZONES contains duplicate zone names.')
+    if len(zones) != 1:
+        raise ValueError('Configure exactly one zone in CLM_ZONES per installation.')
     return zones
 
 
@@ -107,14 +147,16 @@ def page_results(page):
     return [(link.inner_text().strip(), link.get_attribute('href')) for link in links.all()]
 
 
-def process_document(page, name, url, zone, report, snapshot, journal=None):
+def process_document(page, name, url, zone, report, snapshot, journal=None, *, retry_unconfirmed=False):
     from playwright.sync_api import TimeoutError as Timeout
     document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
     if not document_id:
         raise ValueError('A search result has no document ID.')
     pending = data_dir() / 'pending' / (document_id + '.json')
-    if pending.exists():
+    if pending.exists() and not retry_unconfirmed:
         raise ValueError(f'An earlier upload for {name} has an uncertain outcome. Check CLM before retrying.')
+    if retry_unconfirmed and not pending.exists():
+        raise ValueError('The previous upload record is missing. Reconcile before retrying.')
     document = page.context.new_page()
     folder = None
     try:
@@ -154,13 +196,19 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
         dialog = document.get_by_role('dialog', name='Upload new version')
         dialog.locator('input[type=file]').set_input_files(str(path))
         pending.parent.mkdir(parents=True, exist_ok=True)
-        pending.write_text(json.dumps({'document_id': document_id, 'name': name, 'url': url}), encoding='utf-8')
-        dialog.get_by_role('button', name='Submit').click()
+        # Keep the record durable before submitting; a crash must not silently retry.
+        with pending.open('w', encoding='utf-8') as stream:
+            json.dump({'document_id': document_id, 'name': name, 'url': url,
+                       'upload_attempt': 2 if retry_unconfirmed else 1}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        deadline = time.monotonic() + UPLOAD_CONFIRM_SECONDS
         try:
-            dialog.wait_for(state='hidden', timeout=120000)
-            document.get_by_text('Success! Your document has been checked in.', exact=True).wait_for(timeout=30000)
+            dialog.get_by_role('button', name='Submit').click(timeout=UPLOAD_CONFIRM_SECONDS * 1000)
+            remaining = max(1, int((deadline - time.monotonic()) * 1000))
+            document.get_by_text('Success! Your document has been checked in.', exact=True).wait_for(timeout=remaining)
         except Timeout as exc:
-            raise ValueError(f'Upload outcome for {name} is uncertain. Check CLM before retrying.') from exc
+            raise UploadUnconfirmed(f'Upload of {name} was not confirmed within 45 seconds.') from exc
         mark_for_deletion(folder)
         processed_at = datetime.now(timezone.utc).isoformat()
         entry = {'zone': zone, 'filename': name, 'docusign_path': docusign_path,
@@ -178,7 +226,7 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
         document.close()
 
 
-def process_zone(page, report, snapshot, zone, known):
+def process_zone(page, report, snapshot, zone, known, event=None):
     """Process each search page and repeat the search until no fileparts remain."""
     select_search(page, report, zone)
     search_url = page.url
@@ -191,6 +239,9 @@ def process_zone(page, report, snapshot, zone, known):
         raise ValueError(f'An unfinished page report exists for {zone}; reconcile it before retrying.')
     while True:
         batch_new = 0
+        retry_needed = False
+        exhausted_seen = False
+        known_seen = False
         while True:
             try:
                 results = page_results(page)
@@ -200,10 +251,56 @@ def process_zone(page, report, snapshot, zone, known):
                 raise
             for name, url in results:
                 document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
+                if not document_id:
+                    raise ValueError('A search result has no document ID.')
                 if document_id in known:
+                    known_seen = True
+                    continue
+                previous = read_attempt(zone, document_id)
+                if previous and (previous.get('status') == 'upload unconfirmed' or previous['attempts'] >= MAX_ATTEMPTS):
+                    exhausted_seen = True
                     continue
                 report(f'Processing {name}')
-                known.add(process_document(page, name, url, zone, report, snapshot, journal))
+                started_at = datetime.now(timezone.utc).isoformat()
+                if event:
+                    event({'type': 'document_started', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at})
+                try:
+                    try:
+                        processed = process_document(page, name, url, zone, report, snapshot, journal)
+                    except UploadUnconfirmed:
+                        report(f'Upload not confirmed for {name}; retrying once.')
+                        processed = process_document(page, name, url, zone, report, snapshot, journal,
+                                                     retry_unconfirmed=True)
+                except UploadUnconfirmed as exc:
+                    failed = record_failure(zone, document_id, name, url, exc, unconfirmed=True)
+                    # The failure record is durable before removing the pending marker.
+                    (data_dir() / 'pending' / (document_id + '.json')).unlink()
+                    exhausted_seen = True
+                    report(f'Upload of {name} unconfirmed after two attempts.')
+                    if event:
+                        event({'type': 'document_failed', 'document_id': document_id, 'name': name,
+                               'url': url, 'started_at': started_at, 'attempts': 2,
+                               'max_attempts': 2, 'reason': str(exc)})
+                    continue
+                except ValueError as exc:
+                    # Once an upload is submitted, its outcome must be reconciled by a person.
+                    if (data_dir() / 'pending' / (document_id + '.json')).exists():
+                        raise
+                    failed = record_failure(zone, document_id, name, url, exc)
+                    exhausted_seen |= failed['attempts'] >= MAX_ATTEMPTS
+                    retry_needed |= failed['attempts'] < MAX_ATTEMPTS
+                    report(f"Could not process {name} (attempt {failed['attempts']} of {MAX_ATTEMPTS}).")
+                    if event:
+                        event({'type': 'document_failed', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at, 'attempts': failed['attempts'], 'reason': str(exc)})
+                    continue
+                known.add(processed)
+                if event:
+                    records = [json.loads(line) for line in history_path().read_text(encoding='utf-8').splitlines() if line.strip()]
+                    item = next((r for r in reversed(records) if r.get('document_id') == document_id and r.get('zone') == zone), None)
+                    if item is None:
+                        raise ValueError('Processed document is missing from history. Reconcile before continuing.')
+                    event({'type': 'document_finished', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at, 'processed_at': item['processed_at'], 'docusign_path': item['docusign_path']})
+                attempt_path(zone, document_id).unlink(missing_ok=True)
                 batch_new += 1
                 total += 1
             if journal.exists():
@@ -211,6 +308,8 @@ def process_zone(page, report, snapshot, zone, known):
                 entries = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines() if line.strip()]
                 report_path = create_page_report(zone, entries)
                 upload_report(page, report_path, report, snapshot)
+                if event:
+                    event({'type': 'ledger_uploaded', 'name': report_path.name, 'uploaded_at': datetime.now(timezone.utc).isoformat()})
                 journal.unlink()
             next_page = page.get_by_role('button', name='Go to next page')
             if not next_page.count() or next_page.is_disabled():
@@ -218,13 +317,18 @@ def process_zone(page, report, snapshot, zone, known):
             previous = results[0][1]
             next_page.click()
             page.wait_for_function("old => { const a = document.querySelector('tbody tr a[href*=\"/Documents/View?\"]'); return a && a.href !== old; }", arg=previous, timeout=30000)
-        if not batch_new:
+        if total:
+            return total
+        if retry_needed:
+            return -1
+        if known_seen:
             raise ValueError('Search still returns previously processed documents. Stopped to avoid repeating uploads.')
-        report('Refreshing search for remaining fileparts.')
-        page.goto(search_url, wait_until='domcontentloaded')
+        if exhausted_seen:
+            return 0
+        raise ValueError('No results could be verified.')
 
 
-def process_one(page, report, snapshot):
+def process_one(page, report, snapshot, event=None):
     zones = configured_zones()
     start_url = page.url
     known = processed_ids()
@@ -233,5 +337,8 @@ def process_one(page, report, snapshot):
         if index:
             page.goto(start_url, wait_until='domcontentloaded')
         report(f'Starting zone {index + 1} of {len(zones)}: {zone}')
-        total += process_zone(page, report, snapshot, zone, known)
+        if event is None:
+            total += process_zone(page, report, snapshot, zone, known)
+        else:
+            total += process_zone(page, report, snapshot, zone, known, event=event)
     return total
