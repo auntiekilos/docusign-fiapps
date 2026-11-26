@@ -20,7 +20,7 @@ def test_processing_lock_rejects_overlap_and_releases_on_error(tmp_path, monkeyp
 
 def test_process_holds_lock_through_final_upload_and_close(tmp_path, monkeypatch):
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
-    monkeypatch.setenv('CLM_ZONES', 'Zona Sur')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
     session = object.__new__(BrowserSession)
     operations = []
 

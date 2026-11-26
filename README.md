@@ -1,6 +1,6 @@
 # DocuSign CLM filepart processing
 
-Set `CLM_URL`, `CLM_USERNAME`, `CLM_PASSWORD`, and `CLM_ZONES` in the environment. Set `CLM_ZONES` to exactly one folder name directly under `CLIENTS/SPAIN`, for example `Zona Sur`. Use separate installations and data directories for separate zones. Do not commit credentials. Start the app with `docker compose up --build` or `streamlit run app.py`.
+Set `CLM_URL`, `CLM_USERNAME`, `CLM_PASSWORD`, and `CLM_Zone` in the environment. Set `CLM_Zone` to exactly one folder name directly under `CLIENTS/SPAIN`, for example `Zona Sur`. Use separate installations and data directories for separate zones. Do not commit credentials. Start the app with `docker compose up --build` or `streamlit run app.py`.
 
 The processing button searches each configured zone for `filepart`, uploads each download unchanged as a new version, traverses all search pages, waits ten minutes, closes the browser, signs in using a fresh browser session, and repeats the filtered search until a clean search is empty. It then uploads a total ledger and closes the browser. The history records document IDs, names, zones and timestamps. If a clean search returns only previously processed or exhausted documents, the app does not upload them again and proceeds to the total ledger. After submission, the app waits up to 45 seconds for the DocuSign check-in confirmation. If it does not appear, the app records the outcome as unconfirmed in the total ledger without resubmitting.
 

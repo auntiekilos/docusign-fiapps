@@ -154,7 +154,7 @@ def test_interrupted_page_report_reuses_same_prepared_file(tmp_path, monkeypatch
 
 @pytest.mark.parametrize('visible,should_raise', [(True, False), (False, True)])
 def test_submitted_report_is_checked_without_resubmission(tmp_path, monkeypatch, visible, should_raise):
-    monkeypatch.setenv("CLM_ZONES", "Zona Sur")
+    monkeypatch.setenv("CLM_Zone", "Zona Sur")
     from clm.reports import upload_report, write_state
     target = tmp_path / 'report.csv'
     target.write_text('report')
@@ -186,7 +186,7 @@ def test_submitted_report_is_checked_without_resubmission(tmp_path, monkeypatch,
 
 def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkeypatch):
     from clm.reports import upload_report, write_state
-    monkeypatch.setenv('CLM_ZONES', 'Zona Sur')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
     target = tmp_path / 'report.csv'
     target.write_text('report')
     write_state(tmp_path / 'state.json', {'status': 'submitted', 'filename': target.name, 'retry_after': 1})

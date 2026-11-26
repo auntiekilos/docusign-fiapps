@@ -34,7 +34,7 @@ class Fake:
 
 def start(monkeypatch, mode="ok", zones="Zona Sur"):
     Fake.mode = mode
-    monkeypatch.setenv("CLM_ZONES", zones)
+    monkeypatch.setenv("CLM_Zone", zones)
     monkeypatch.setattr(clm.browser, "BrowserSession", Fake)
     st.cache_resource.clear()
     return AppTest.from_file(str(Path(__file__).parent.parent / "app.py"), default_timeout=20).run()
@@ -82,7 +82,7 @@ def test_run_error_stays_visible_and_signs_out(monkeypatch):
 def test_missing_zone_is_reported_without_login(monkeypatch):
     at = start(monkeypatch, zones="")
     at = at.button[0].click().run()
-    assert "Set CLM_ZONES" in html(at)
+    assert "Set CLM_Zone" in html(at)
 
 
 def test_setup_list_has_six_fixed_slots_and_keeps_all_rows(monkeypatch):
@@ -92,7 +92,7 @@ def test_setup_list_has_six_fixed_slots_and_keeps_all_rows(monkeypatch):
                 progress(f"Step {i}")
             raise ValueError("Sign-in was rejected.")
 
-    monkeypatch.setenv("CLM_ZONES", "Zona Sur")
+    monkeypatch.setenv("CLM_Zone", "Zona Sur")
     monkeypatch.setattr(clm.browser, "BrowserSession", Many)
     st.cache_resource.clear()
     at = AppTest.from_file(str(Path(__file__).parent.parent / "app.py"), default_timeout=20).run()

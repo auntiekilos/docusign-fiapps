@@ -7,7 +7,7 @@ services:
       - CLM_URL
       - CLM_USERNAME
       - CLM_PASSWORD
-      - CLM_ZONES
+      - CLM_Zone
       - CLM_DATA_DIR=/data/clm
     volumes:
       - clm-data:/data/clm

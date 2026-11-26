@@ -177,12 +177,12 @@ def mark_for_deletion(folder, now=None, *, confirmed=True):
 
 
 def configured_zones():
-    raw = os.environ.get('CLM_ZONES', '')
+    raw = os.environ.get('CLM_Zone', '')
     zones = [zone.strip() for zone in raw.split(',') if zone.strip()]
     if not zones:
-        raise ValueError('Set CLM_ZONES to a comma-separated list of zone folder names.')
+        raise ValueError('Set CLM_Zone to one zone folder name.')
     if len(zones) != 1:
-        raise ValueError('Configure exactly one zone in CLM_ZONES per installation.')
+        raise ValueError('Configure exactly one zone in CLM_Zone per installation.')
     return zones
 
 

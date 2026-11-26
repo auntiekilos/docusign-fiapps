@@ -3,18 +3,18 @@ from clm import fileparts
 
 
 def test_zone_configuration_requires_one_zone(monkeypatch):
-    monkeypatch.delenv('CLM_ZONES', raising=False)
-    with pytest.raises(ValueError, match='CLM_ZONES'):
+    monkeypatch.delenv('CLM_Zone', raising=False)
+    with pytest.raises(ValueError, match='CLM_Zone'):
         fileparts.configured_zones()
-    monkeypatch.setenv('CLM_ZONES', ' Zona Sur ')
+    monkeypatch.setenv('CLM_Zone', ' Zona Sur ')
     assert fileparts.configured_zones() == ['Zona Sur']
-    monkeypatch.setenv('CLM_ZONES', 'Zona Sur,Zona Norte')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur,Zona Norte')
     with pytest.raises(ValueError, match='exactly one'):
         fileparts.configured_zones()
 
 
 def test_process_one_uses_configured_zone(monkeypatch):
-    monkeypatch.setenv('CLM_ZONES', 'Zona Sur')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
     monkeypatch.setattr(fileparts, 'processed_ids', lambda: {'already-done'})
     calls = []
     def run_zone(page, report, snapshot, zone, known):
@@ -29,7 +29,7 @@ def test_process_one_uses_configured_zone(monkeypatch):
 
 def test_clean_search_restarts_browser_and_closes_after_total(monkeypatch):
     from clm.browser import BrowserSession
-    monkeypatch.setenv('CLM_ZONES', 'Zona Sur')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
     monkeypatch.setenv('CLM_URL', 'https://example.test')
     session = object.__new__(BrowserSession)
     events = []
@@ -50,7 +50,7 @@ def test_clean_search_restarts_browser_and_closes_after_total(monkeypatch):
 
 def test_browser_closes_when_processing_fails(monkeypatch):
     from clm.browser import BrowserSession
-    monkeypatch.setenv('CLM_ZONES', 'Zona Sur')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
     session = object.__new__(BrowserSession)
     events = []
     def operation(name, *args):
