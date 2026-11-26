@@ -203,10 +203,44 @@ class BrowserSession:
                 screenshot(value)
         return future.result()
 
+    def process_filepart(self, progress=None, screenshot=None):
+        future, updates = Future(), Queue()
+        self._commands.put(("filepart", future, updates))
+        while not future.done():
+            try:
+                kind, value = updates.get(timeout=0.5)
+                if kind == "progress" and progress:
+                    progress(value)
+                elif kind == "screenshot" and screenshot and value:
+                    screenshot(value)
+            except Empty:
+                pass
+        while not updates.empty():
+            kind, value = updates.get_nowait()
+            if kind == "progress" and progress:
+                progress(value)
+            elif kind == "screenshot" and screenshot and value:
+                screenshot(value)
+        return future.result()
+
     def _run(self):
         playwright = browser = context = None
         while True:
             command = self._commands.get()
+            if len(command) == 3 and command[0] == "filepart":
+                _, future, updates = command
+                try:
+                    if context is None or browser is None or not browser.is_connected():
+                        raise ValueError("Sign in before processing a document.")
+                    from clm.fileparts import process_one
+                    page = context.pages[0]
+                    result = process_one(page, lambda value: updates.put(("progress", value)),
+                                         lambda current: updates.put(("screenshot", page_image(current))))
+                    future.set_result(result)
+                except Exception as exc:
+                    future.set_exception(ValueError(str(exc) if isinstance(exc, ValueError) else
+                        "Processing stopped. Check CLM before retrying, especially if upload was submitted."))
+                continue
             if len(command) == 6 and command[0] == "download":
                 _, folders, filename, destination, future, updates = command
                 try:
@@ -259,7 +293,7 @@ class BrowserSession:
 
                 def check_login_origin():
                     actual = urlsplit(page.url)
-                    if actual.scheme != "https" or actual.hostname != "account-d.docusign.com" or actual.port not in (None, 443):
+                    if actual.scheme != "https" or actual.hostname not in ("account-d.docusign.com", "account.docusign.com") or actual.port not in (None, 443):
                         raise ValueError("Unexpected login host; credentials were not entered there.")
 
                 if not on_target():

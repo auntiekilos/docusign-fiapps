@@ -1,4 +1,6 @@
 import os
+import json
+from pathlib import Path
 
 import streamlit as st
 from clm.browser import BrowserSession, LoginError
@@ -43,6 +45,28 @@ def document_view():
         image_area.image(st.session_state.login_image, caption="Current browser view. Input fields are masked.")
     if st.session_state.login_result[0] != "success":
         return
+    st.subheader("Process a filepart")
+    st.write("Search Zona Sur and upload one file as a new version.")
+    if st.button("Process one document"):
+        progress = st.empty()
+        def show_processing_image(image):
+            st.session_state.login_image = image
+            image_area.image(image, caption="Current browser view. Input fields are masked.")
+        try:
+            name = browser_session().process_filepart(progress.info, show_processing_image)
+            progress.empty()
+            st.success(f"Processed: {name}")
+        except ValueError as exc:
+            progress.empty()
+            st.error(str(exc))
+    history_path = Path(os.environ.get("CLM_HISTORY_PATH", str(Path.home() / ".clm" / "processed.jsonl")))
+    if history_path.is_file():
+        with st.expander("Processed documents"):
+            try:
+                entries = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                st.dataframe(list(reversed(entries)), hide_index=True)
+            except (OSError, ValueError):
+                st.warning("Could not read the processing history.")
     st.subheader("Download a document")
     with st.form("document_download"):
         folder_text = st.text_area("Folders, one per line", value="CLIENTS\nSPAIN\nUnited States of America\n793663 - & OTHER STORIES\nNDA")
