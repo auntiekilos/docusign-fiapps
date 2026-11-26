@@ -372,9 +372,7 @@ def process_zone(page, report, snapshot, zone, known, event=None):
             return total
         if retry_needed:
             return -1
-        if known_seen:
-            raise ValueError('Search still returns previously processed documents. Stopped to avoid repeating uploads.')
-        if exhausted_seen:
+        if known_seen or exhausted_seen:
             return 0
         raise ValueError('No results could be verified.')
 

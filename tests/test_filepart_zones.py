@@ -63,7 +63,7 @@ def test_browser_closes_when_processing_fails(monkeypatch):
     assert events == ['filepart', 'close']
 
 
-def test_reappearing_processed_result_stops_without_reupload(tmp_path, monkeypatch):
+def test_reappearing_processed_result_completes_without_reupload(tmp_path, monkeypatch):
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
     monkeypatch.setattr(fileparts, 'select_search', lambda *args: None)
     monkeypatch.setattr(fileparts, 'page_results', lambda page: [('example', 'https://example.test/?Id=1')])
@@ -72,8 +72,7 @@ def test_reappearing_processed_result_stops_without_reupload(tmp_path, monkeypat
     class Page:
         url = 'https://example.test/search'
         def get_by_role(self, *args, **kwargs): return Next()
-    with pytest.raises(ValueError, match='previously processed'):
-        fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', {'1'})
+    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', {'1'}) == 0
 
 
 def test_failed_document_retried_four_times_and_then_exhausted(tmp_path, monkeypatch):
@@ -151,3 +150,20 @@ def test_unconfirmed_upload_is_not_retried_and_is_in_total_ledger(tmp_path, monk
     assert row['attempts'] == '1'
     assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 0
     assert calls == [False]
+
+
+def test_confirmed_and_exhausted_results_complete_together(tmp_path, monkeypatch):
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(fileparts, 'select_search', lambda *args: None)
+    monkeypatch.setattr(fileparts, 'page_results', lambda page: [
+        ('done.pdf', 'https://example.test/?Id=1'),
+        ('failed.pdf', 'https://example.test/?Id=2'),
+    ])
+    for _ in range(fileparts.MAX_ATTEMPTS):
+        fileparts.record_failure('Zona Sur', '2', 'failed.pdf', 'https://example.test/?Id=2', 'Download failed')
+    class Next:
+        def count(self): return 0
+    class Page:
+        url = 'https://example.test/search'
+        def get_by_role(self, *args, **kwargs): return Next()
+    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', {'1'}) == 0
