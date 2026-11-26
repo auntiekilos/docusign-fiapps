@@ -229,6 +229,7 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
         raise ValueError(f'An earlier upload for {name} has an uncertain outcome. Check CLM before retrying.')
     document = page.context.new_page()
     folder = None
+    confirmed = False
     try:
         document.goto(url, wait_until='domcontentloaded')
         snapshot(document)
@@ -268,6 +269,7 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
         except Timeout as exc:
             raise UploadUnconfirmed(f'Upload of {name} was not confirmed within 45 seconds.') from exc
         mark_for_deletion(folder)
+        confirmed = True
         processed_at = datetime.now(timezone.utc).isoformat()
         entry = {'zone': zone, 'filename': name, 'docusign_path': docusign_path,
                  'document_url': url, 'document_id': document_id, 'processed_at': processed_at}
@@ -283,8 +285,39 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
     finally:
         document.close()
         # A copy is needed only after confirmation or when submission is uncertain.
-        if folder is not None and not pending.exists() and not (folder / 'delete-after.json').exists():
+        if folder is not None and not pending.exists() and not confirmed:
             shutil.rmtree(folder, ignore_errors=True)
+
+
+def finish_page_report(page, journal, zone, known, report, snapshot, event=None):
+    from clm.reports import create_page_report, upload_report, write_state
+    manifest = journal.with_suffix('.report.json')
+    if not journal.exists():
+        manifest.unlink(missing_ok=True)
+        return
+    entries = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines() if line.strip()]
+    digest = hashlib.sha256(journal.read_bytes()).hexdigest()
+    if manifest.exists():
+        saved = json.loads(manifest.read_text(encoding='utf-8'))
+        if saved['digest'] != digest:
+            raise ValueError('Page records changed after report preparation. Check the report before continuing.')
+        report_path = Path(saved['path'])
+    else:
+        report_path = create_page_report(zone, entries)
+        write_state(manifest, {'digest': digest, 'path': str(report_path)})
+    upload_report(page, report_path, report, snapshot)
+    # A crash may occur between recording the page and appending global history.
+    recorded = processed_ids()
+    for entry in entries:
+        if entry['document_id'] not in recorded:
+            record_processed(entry['document_id'], entry['filename'], entry['zone'],
+                             entry['document_url'], entry['docusign_path'], entry['processed_at'])
+            recorded.add(entry['document_id'])
+        known.add(entry['document_id'])
+    if event:
+        event({'type': 'ledger_uploaded', 'name': report_path.name, 'uploaded_at': datetime.now(timezone.utc).isoformat()})
+    journal.unlink()
+    manifest.unlink(missing_ok=True)
 
 
 def process_zone(page, report, snapshot, zone, known, event=None):
@@ -296,8 +329,7 @@ def process_zone(page, report, snapshot, zone, known, event=None):
     journal_dir.mkdir(parents=True, exist_ok=True)
     import hashlib
     journal = journal_dir / (hashlib.sha256(zone.encode()).hexdigest() + '.jsonl')
-    if journal.exists():
-        raise ValueError(f'An unfinished page report exists for {zone}; reconcile it before retrying.')
+    finish_page_report(page, journal, zone, known, report, snapshot, event)
     while True:
         batch_new = 0
         retry_needed = False
@@ -368,14 +400,7 @@ def process_zone(page, report, snapshot, zone, known, event=None):
                 attempt_path(zone, document_id).unlink(missing_ok=True)
                 batch_new += 1
                 total += 1
-            if journal.exists():
-                from clm.reports import create_page_report, upload_report
-                entries = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines() if line.strip()]
-                report_path = create_page_report(zone, entries)
-                upload_report(page, report_path, report, snapshot)
-                if event:
-                    event({'type': 'ledger_uploaded', 'name': report_path.name, 'uploaded_at': datetime.now(timezone.utc).isoformat()})
-                journal.unlink()
+            finish_page_report(page, journal, zone, known, report, snapshot, event)
             next_page = page.get_by_role('button', name='Go to next page')
             if not next_page.count() or next_page.is_disabled():
                 break

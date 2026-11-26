@@ -253,6 +253,9 @@ class BrowserSession:
             return self._process_filepart(progress, screenshot, event)
 
     def _process_filepart(self, progress=None, screenshot=None, event=None):
+        from clm.fileparts import configured_zones
+        from clm.recovery import preserve_interrupted_uploads
+        preserve_interrupted_uploads(configured_zones()[0])
         total = 0
         try:
             while True:

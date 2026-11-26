@@ -5,12 +5,28 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
 import re
+import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from clm.fileparts import data_dir
 
 FIELDS = ('zone', 'filename', 'docusign_path', 'document_url', 'document_id', 'processed_at')
+
+
+def write_state(path, state):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(dir=path.parent, prefix='.state-')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(state, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
 
 
 def create_page_report(zone, entries):
@@ -46,7 +62,7 @@ def create_page_report(zone, entries):
             writer.writerows(entries)
             stream.flush()
             os.fsync(stream.fileno())
-        (folder / 'state.json').write_text(json.dumps({'status': 'pending', 'filename': filename}), encoding='utf-8')
+        write_state(folder / 'state.json', {'status': 'pending', 'filename': filename})
     except BaseException:
         # Preserve the reserved sequence if a partially written file exists.
         raise
@@ -78,14 +94,22 @@ def upload_report(search_page, report_path, report, snapshot):
             page.locator('a[aria-label="Navigate to folder ' + folder + '"]').wait_for(timeout=30000)
         snapshot(page)
         existing = page.get_by_role('row').get_by_role('link', name=report_path.name, exact=True)
+        state = report_path.parent / 'state.json'
+        saved = json.loads(state.read_text(encoding='utf-8')) if state.exists() else {}
+        status = saved.get('status')
+        if status in ('submitted', 'uploaded'):
+            if not existing.count():
+                raise ValueError(f'Report {report_path.name} was submitted but is not visible. Check DocuSign before continuing.')
+            write_state(state, {'status': 'uploaded', 'filename': report_path.name})
+            return
         if existing.count():
             raise ValueError(f'Report {report_path.name} already exists in DocuSign. Check it before continuing.')
         report(f'Uploading report {report_path.name}.')
         page.get_by_role('menuitem', name='File', exact=True).click()
+        write_state(state, {'status': 'submitted', 'filename': report_path.name})
         page.locator('li.fileUploadButton input[type=file]').set_input_files(str(report_path))
         existing.wait_for(timeout=120000)
-        state = report_path.parent / 'state.json'
-        state.write_text(json.dumps({'status': 'uploaded', 'filename': report_path.name}), encoding='utf-8')
+        write_state(state, {'status': 'uploaded', 'filename': report_path.name})
         snapshot(page)
     finally:
         page.close()
@@ -126,6 +150,9 @@ def create_total_report(zone):
     root = data_dir() / 'total-reports' / safe_zone
     root.mkdir(parents=True, exist_ok=True)
     target = root / f'{safe_zone.upper()} - TOTAL LEDGER.csv'
+    state = root / 'state.json'
+    if target.exists() and state.exists():
+        return target
     try:
         with target.open('x', encoding='utf-8-sig', newline='') as stream:
             writer = csv.DictWriter(stream, fieldnames=(*FIELDS, 'status', 'attempts', 'reason'), extrasaction='ignore')
@@ -133,6 +160,7 @@ def create_total_report(zone):
             writer.writerows(items)
             stream.flush()
             os.fsync(stream.fileno())
+        write_state(state, {'status': 'pending', 'filename': target.name})
     except FileExistsError as exc:
         raise ValueError('A total ledger already exists locally. Reconcile it before retrying.') from exc
     return target

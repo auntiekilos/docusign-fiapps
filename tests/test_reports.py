@@ -67,8 +67,7 @@ def test_total_report_includes_all_zone_history(tmp_path, monkeypatch):
     assert report.name == 'ZONA SUR - TOTAL LEDGER.csv'
     with report.open(encoding='utf-8-sig', newline='') as stream:
         assert [row['document_id'] for row in csv.DictReader(stream)] == ['1']
-    with pytest.raises(ValueError, match='already exists'):
-        create_total_report('Zona Sur')
+    assert create_total_report('Zona Sur') == report
 
 
 def test_total_report_blocks_unfinished_uploads(tmp_path, monkeypatch):
@@ -129,3 +128,56 @@ def test_total_ledger_includes_success_failure_and_uncertain_upload(tmp_path, mo
     assert rows['3']['status'] == 'upload unconfirmed'
     assert rows['3']['reason'] == 'No confirmation'
     assert total_report_issue_count(report) == 2
+
+
+def test_interrupted_page_report_reuses_same_prepared_file(tmp_path, monkeypatch):
+    import json
+    from clm import fileparts, reports
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    journal = tmp_path / 'page-journals' / 'zone.jsonl'
+    journal.parent.mkdir()
+    journal.write_text(json.dumps(entry()) + '\n')
+    uploads = []
+    def interrupted(page, path, report, snapshot):
+        uploads.append(path)
+        if len(uploads) == 1:
+            raise ValueError('interrupted')
+    monkeypatch.setattr(reports, 'upload_report', interrupted)
+    with pytest.raises(ValueError, match='interrupted'):
+        fileparts.finish_page_report(None, journal, 'Zona Sur', set(), lambda _: None, lambda _: None)
+    known = set()
+    fileparts.finish_page_report(None, journal, 'Zona Sur', known, lambda _: None, lambda _: None)
+    assert uploads[0] == uploads[1]
+    assert known == {'1'} and not journal.exists()
+    assert fileparts.processed_ids() == {'1'}
+
+
+@pytest.mark.parametrize('visible,should_raise', [(True, False), (False, True)])
+def test_submitted_report_is_checked_without_resubmission(tmp_path, visible, should_raise):
+    from clm.reports import upload_report, write_state
+    target = tmp_path / 'report.csv'
+    target.write_text('report')
+    write_state(tmp_path / 'state.json', {'status': 'submitted', 'filename': target.name})
+    class Locator:
+        def is_visible(self): return False
+        def wait_for(self, **kwargs): pass
+        def click(self, **kwargs): pass
+        def count(self): return int(visible)
+        def get_by_role(self, *args, **kwargs): return self
+        @property
+        def first(self): return self
+        def set_input_files(self, *args): raise AssertionError('Must not resubmit')
+    class Page:
+        def __init__(self): self.context = self
+        def new_page(self): return self
+        def goto(self, *args, **kwargs): pass
+        def locator(self, *args, **kwargs): return Locator()
+        def get_by_role(self, *args, **kwargs): return Locator()
+        def close(self): pass
+    search = Page()
+    search.url = 'https://example.test/search?aid=1'
+    if should_raise:
+        with pytest.raises(ValueError, match='submitted but is not visible'):
+            upload_report(search, target, lambda _: None, lambda _: None)
+    else:
+        upload_report(search, target, lambda _: None, lambda _: None)
