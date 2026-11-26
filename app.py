@@ -46,8 +46,8 @@ def document_view():
     if st.session_state.login_result[0] != "success":
         return
     st.subheader("Process a filepart")
-    st.write("Search Zona Sur and upload one file as a new version.")
-    if st.button("Process one document"):
+    st.write("Search Zona Sur and upload each filepart as a new version.")
+    if st.button("Process Zona Sur"):
         progress = st.empty()
         def show_processing_image(image):
             st.session_state.login_image = image
@@ -55,7 +55,7 @@ def document_view():
         try:
             name = browser_session().process_filepart(progress.info, show_processing_image)
             progress.empty()
-            st.success(f"Processed: {name}")
+            st.success(f"Processed {name} documents.")
         except ValueError as exc:
             progress.empty()
             st.error(str(exc))

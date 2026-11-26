@@ -1,29 +1,76 @@
-"""Convert a searched filepart by downloading and uploading its bytes unchanged."""
+"""Process CLM filepart search results and retain downloaded copies for four hours."""
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlsplit
 import json
 import os
+import shutil
 import tempfile
-from datetime import datetime, timezone
+import threading
+import time
+
+RETENTION_SECONDS = 4 * 60 * 60
+
+
+def data_dir():
+    return Path(os.environ.get('CLM_DATA_DIR', str(Path.home() / '.clm')))
+
+
+def history_path():
+    return Path(os.environ.get('CLM_HISTORY_PATH', str(data_dir() / 'processed.jsonl')))
 
 
 def record_processed(document_id, name, zone):
-    path = Path(os.environ.get('CLM_HISTORY_PATH', str(Path.home() / '.clm' / 'processed.jsonl')))
+    path = history_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a', encoding='utf-8') as out:
         out.write(json.dumps({'document_id': document_id, 'name': name, 'zone': zone,
                               'processed_at': datetime.now(timezone.utc).isoformat()}, ensure_ascii=False) + '\n')
 
 
-def process_one(page, report, snapshot):
-    from urllib.parse import parse_qs, urlsplit
-    from playwright.sync_api import TimeoutError as Timeout
+def processed_ids():
+    path = history_path()
+    if not path.exists():
+        return set()
+    return {json.loads(line)['document_id'] for line in path.read_text(encoding='utf-8').splitlines() if line.strip()}
+
+
+def cleanup_expired(now=None):
+    now = time.time() if now is None else now
+    root = data_dir() / 'downloads'
+    if not root.exists():
+        return
+    for marker in root.glob('*/delete-after.json'):
+        try:
+            entry = json.loads(marker.read_text(encoding='utf-8'))
+            if now >= entry['delete_after']:
+                shutil.rmtree(marker.parent)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f'Unable to clean retained download {marker.parent.name}: {type(exc).__name__}', flush=True)
+
+
+def start_cleanup_worker():
+    def run():
+        while True:
+            cleanup_expired()
+            time.sleep(60)
+    threading.Thread(target=run, name='clm-download-cleanup', daemon=True).start()
+
+
+def mark_for_deletion(folder, now=None):
+    deadline = (time.time() if now is None else now) + RETENTION_SECONDS
+    marker = folder / 'delete-after.json'
+    marker.write_text(json.dumps({'delete_after': deadline}), encoding='utf-8')
+
+
+def select_search(page, report):
     close = page.locator('#walkthrough button.ux-modal__close')
     if close.is_visible():
         close.click(force=True)
     welcome = page.get_by_role('button', name='Got it', exact=True)
     if welcome.is_visible():
         welcome.click()
-    report('Opening search and filtering filepart documents.')
+    report('Searching for filepart documents in Zona Sur.')
     page.get_by_role('button', name='search', exact=True).click()
     page.get_by_role('button', name='All filters, none applied').click()
     page.get_by_role('button', name='File Type', exact=True).click()
@@ -35,20 +82,30 @@ def process_one(page, report, snapshot):
     page.get_by_role('button', name='All filters, filters applied').click()
     page.get_by_role('button', name='Location', exact=True).click()
     menu = page.get_by_role('dialog', name='Filter Menu')
-    menu.get_by_role('button', name='View location', description='/F. Iniciativas Espana I Mas D Mas I/CLIENTS/').click()
-    menu.get_by_role('button', name='View location', description='/F. Iniciativas Espana I Mas D Mas I/CLIENTS/SPAIN/').click()
+    menu.locator("button[data-qa='view-19ead1d3-60fb-f011-87a4-88e9a4a867b6']").click()
+    menu.locator("button[data-qa='view-a74a8a13-effd-f011-87a4-88e9a4a867b6']").click()
     menu.get_by_placeholder('Find in SPAIN').fill('Zona Sur')
     menu.get_by_text('Zona Sur', exact=True).click()
     menu.get_by_role('button', name='Apply').click()
     page.get_by_role('dialog', name='All Filters').get_by_role('button', name='Save').click()
-    report('Opening first Zona Sur result.')
-    row = page.get_by_role('row').filter(has=page.get_by_role('button', name='Search Actions')).first
-    link = row.get_by_role('link').first
-    name, url = link.inner_text(), link.get_attribute('href')
+
+
+def page_results(page):
+    links = page.locator('tbody tr a[href*="/Documents/View?"]')
+    links.first.wait_for(timeout=30000)
+    return [(link.inner_text().strip(), link.get_attribute('href')) for link in links.all()]
+
+
+def process_document(page, name, url, report, snapshot):
+    from playwright.sync_api import TimeoutError as Timeout
     document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
     if not document_id:
-        raise ValueError('The selected result has no document ID.')
+        raise ValueError('A search result has no document ID.')
+    pending = data_dir() / 'pending' / (document_id + '.json')
+    if pending.exists():
+        raise ValueError(f'An earlier upload for {name} has an uncertain outcome. Check CLM before retrying.')
     document = page.context.new_page()
+    folder = None
     try:
         document.goto(url, wait_until='domcontentloaded')
         snapshot(document)
@@ -59,24 +116,66 @@ def process_one(page, report, snapshot):
         download = event.value
         if download.failure():
             raise ValueError('Document download failed.')
-        with tempfile.TemporaryDirectory() as tmp:
-            filename = Path(download.suggested_filename).name
-            path = Path(tmp) / filename
-            download.save_as(str(path))
-            if not path.stat().st_size:
-                raise ValueError('Downloaded document is empty.')
-            report('Uploading the downloaded file as a new version.')
-            actions.click()
-            document.get_by_role('menuitem', name='Upload new version').click()
-            dialog = document.get_by_role('dialog', name='Upload new version')
-            dialog.locator('input[type=file]').set_input_files(str(path))
-            dialog.get_by_role('button', name='Submit').click()
-            try:
-                dialog.wait_for(state='hidden', timeout=120000)
-            except Timeout as exc:
-                raise ValueError('Upload was submitted but completion could not be confirmed. Check CLM before retrying.') from exc
-            snapshot(document)
+        root = data_dir() / 'downloads'
+        root.mkdir(parents=True, exist_ok=True)
+        folder = Path(tempfile.mkdtemp(prefix='document-', dir=root))
+        path = folder / Path(download.suggested_filename).name
+        download.save_as(str(path))
+        download.delete()
+        if not path.stat().st_size:
+            raise ValueError('Downloaded document is empty.')
+        report(f'Uploading: {name}')
+        actions.click()
+        document.get_by_role('menuitem', name='Upload new version').click()
+        dialog = document.get_by_role('dialog', name='Upload new version')
+        dialog.locator('input[type=file]').set_input_files(str(path))
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        pending.write_text(json.dumps({'document_id': document_id, 'name': name, 'url': url}), encoding='utf-8')
+        dialog.get_by_role('button', name='Submit').click()
+        try:
+            dialog.wait_for(state='hidden', timeout=120000)
+            document.get_by_text('Success! Your document has been checked in.', exact=True).wait_for(timeout=30000)
+        except Timeout as exc:
+            raise ValueError(f'Upload outcome for {name} is uncertain. Check CLM before retrying.') from exc
+        mark_for_deletion(folder)
         record_processed(document_id, name, 'Zona Sur')
-        return name
+        pending.unlink()
+        snapshot(document)
+        return document_id
     finally:
         document.close()
+
+
+def process_one(page, report, snapshot):
+    """Process all visible search pages, then repeat the search until empty."""
+    select_search(page, report)
+    search_url = page.url
+    known = processed_ids()
+    total = 0
+    while True:
+        batch_new = 0
+        while True:
+            try:
+                results = page_results(page)
+            except Exception:
+                if page.get_by_text('0 results', exact=True).is_visible():
+                    return total
+                raise
+            for name, url in results:
+                document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
+                if document_id in known:
+                    continue
+                report(f'Processing {name}')
+                known.add(process_document(page, name, url, report, snapshot))
+                batch_new += 1
+                total += 1
+            next_page = page.get_by_role('button', name='Go to next page')
+            if not next_page.count() or next_page.is_disabled():
+                break
+            previous = results[0][1]
+            next_page.click()
+            page.wait_for_function("old => { const a = document.querySelector('tbody tr a[href*=\"/Documents/View?\"]'); return a && a.href !== old; }", arg=previous, timeout=30000)
+        if not batch_new:
+            raise ValueError('Search still returns previously processed documents. Stopped to avoid repeating uploads.')
+        report('Refreshing search for remaining fileparts.')
+        page.goto(search_url, wait_until='domcontentloaded')

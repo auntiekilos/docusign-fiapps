@@ -151,6 +151,8 @@ def launch_browser(playwright, report=log_status):
 class BrowserSession:
     def __init__(self):
         self._commands = Queue()
+        from clm.fileparts import start_cleanup_worker
+        start_cleanup_worker()
         Thread(target=self._run, daemon=True, name="browser-worker").start()
 
     def login(self, url: str, progress=None) -> str:
