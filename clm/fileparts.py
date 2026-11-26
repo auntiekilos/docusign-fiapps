@@ -1,6 +1,6 @@
 """Process CLM filepart search results and retain downloaded copies for four hours."""
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 import json
 import os
@@ -63,14 +63,24 @@ def mark_for_deletion(folder, now=None):
     marker.write_text(json.dumps({'delete_after': deadline}), encoding='utf-8')
 
 
-def select_search(page, report):
+def configured_zones():
+    raw = os.environ.get('CLM_ZONES', '')
+    zones = [zone.strip() for zone in raw.split(',') if zone.strip()]
+    if not zones:
+        raise ValueError('Set CLM_ZONES to a comma-separated list of zone folder names.')
+    if len(set(zones)) != len(zones):
+        raise ValueError('CLM_ZONES contains duplicate zone names.')
+    return zones
+
+
+def select_search(page, report, zone):
     close = page.locator('#walkthrough button.ux-modal__close')
     if close.is_visible():
         close.click(force=True)
     welcome = page.get_by_role('button', name='Got it', exact=True)
     if welcome.is_visible():
         welcome.click()
-    report('Searching for filepart documents in Zona Sur.')
+    report(f'Searching for filepart documents in {zone}.')
     page.get_by_role('button', name='search', exact=True).click()
     page.get_by_role('button', name='All filters, none applied').click()
     page.get_by_role('button', name='File Type', exact=True).click()
@@ -84,8 +94,8 @@ def select_search(page, report):
     menu = page.get_by_role('dialog', name='Filter Menu')
     menu.locator("button[data-qa='view-19ead1d3-60fb-f011-87a4-88e9a4a867b6']").click()
     menu.locator("button[data-qa='view-a74a8a13-effd-f011-87a4-88e9a4a867b6']").click()
-    menu.get_by_placeholder('Find in SPAIN').fill('Zona Sur')
-    menu.get_by_text('Zona Sur', exact=True).click()
+    menu.get_by_placeholder('Find in SPAIN').fill(zone)
+    menu.get_by_text(zone, exact=True).click()
     menu.get_by_role('button', name='Apply').click()
     page.get_by_role('dialog', name='All Filters').get_by_role('button', name='Save').click()
 
@@ -96,7 +106,7 @@ def page_results(page):
     return [(link.inner_text().strip(), link.get_attribute('href')) for link in links.all()]
 
 
-def process_document(page, name, url, report, snapshot):
+def process_document(page, name, url, zone, report, snapshot):
     from playwright.sync_api import TimeoutError as Timeout
     document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
     if not document_id:
@@ -138,7 +148,7 @@ def process_document(page, name, url, report, snapshot):
         except Timeout as exc:
             raise ValueError(f'Upload outcome for {name} is uncertain. Check CLM before retrying.') from exc
         mark_for_deletion(folder)
-        record_processed(document_id, name, 'Zona Sur')
+        record_processed(document_id, name, zone)
         pending.unlink()
         snapshot(document)
         return document_id
@@ -146,11 +156,10 @@ def process_document(page, name, url, report, snapshot):
         document.close()
 
 
-def process_one(page, report, snapshot):
-    """Process all visible search pages, then repeat the search until empty."""
-    select_search(page, report)
+def process_zone(page, report, snapshot, zone, known):
+    """Process each search page and repeat the search until no fileparts remain."""
+    select_search(page, report, zone)
     search_url = page.url
-    known = processed_ids()
     total = 0
     while True:
         batch_new = 0
@@ -166,7 +175,7 @@ def process_one(page, report, snapshot):
                 if document_id in known:
                     continue
                 report(f'Processing {name}')
-                known.add(process_document(page, name, url, report, snapshot))
+                known.add(process_document(page, name, url, zone, report, snapshot))
                 batch_new += 1
                 total += 1
             next_page = page.get_by_role('button', name='Go to next page')
@@ -179,3 +188,16 @@ def process_one(page, report, snapshot):
             raise ValueError('Search still returns previously processed documents. Stopped to avoid repeating uploads.')
         report('Refreshing search for remaining fileparts.')
         page.goto(search_url, wait_until='domcontentloaded')
+
+
+def process_one(page, report, snapshot):
+    zones = configured_zones()
+    start_url = page.url
+    known = processed_ids()
+    total = 0
+    for index, zone in enumerate(zones):
+        if index:
+            page.goto(start_url, wait_until='domcontentloaded')
+        report(f'Starting zone {index + 1} of {len(zones)}: {zone}')
+        total += process_zone(page, report, snapshot, zone, known)
+    return total

@@ -46,8 +46,8 @@ def document_view():
     if st.session_state.login_result[0] != "success":
         return
     st.subheader("Process a filepart")
-    st.write("Search Zona Sur and upload each filepart as a new version.")
-    if st.button("Process Zona Sur"):
+    st.write("Search the configured zones and upload each filepart as a new version.")
+    if st.button("Process configured zones"):
         progress = st.empty()
         def show_processing_image(image):
             st.session_state.login_image = image
@@ -59,7 +59,7 @@ def document_view():
         except ValueError as exc:
             progress.empty()
             st.error(str(exc))
-    history_path = Path(os.environ.get("CLM_HISTORY_PATH", str(Path.home() / ".clm" / "processed.jsonl")))
+    history_path = Path(os.environ.get("CLM_HISTORY_PATH", str(Path(os.environ.get("CLM_DATA_DIR", str(Path.home() / ".clm"))) / "processed.jsonl")))
     if history_path.is_file():
         with st.expander("Processed documents"):
             try:
