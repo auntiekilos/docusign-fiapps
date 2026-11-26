@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 import json
+import errno
 import hashlib
 import os
 import shutil
@@ -11,6 +12,7 @@ import threading
 import time
 
 RETENTION_SECONDS = 4 * 60 * 60
+UNCONFIRMED_RETENTION_SECONDS = 2 * 60
 MAX_ATTEMPTS = 4  # More than three attempts means four total attempts.
 UPLOAD_CONFIRM_SECONDS = 45
 DOWNLOAD_RETRY_SECONDS = 10 * 60
@@ -60,6 +62,16 @@ def read_attempt(zone, document_id):
 
 
 def record_failure(zone, document_id, name, url, reason, *, unconfirmed=False):
+    try:
+        return _record_failure(zone, document_id, name, url, reason, unconfirmed=unconfirmed)
+    except OSError as exc:
+        if exc.errno != errno.ENOSPC:
+            raise
+        cleanup_confirmed_downloads()
+        return _record_failure(zone, document_id, name, url, reason, unconfirmed=unconfirmed)
+
+
+def _record_failure(zone, document_id, name, url, reason, *, unconfirmed=False):
     path = attempt_path(zone, document_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     previous = read_attempt(zone, document_id) or {}
@@ -100,7 +112,7 @@ def cleanup_confirmed_downloads():
     for marker in root.glob('*/delete-after.json'):
         try:
             entry = json.loads(marker.read_text(encoding='utf-8'))
-            if not isinstance(entry['delete_after'], (int, float)):
+            if entry.get('status', 'confirmed') != 'confirmed' or not isinstance(entry['delete_after'], (int, float)):
                 continue
             shutil.rmtree(marker.parent)
         except FileNotFoundError:
@@ -157,10 +169,11 @@ def start_cleanup_worker():
     threading.Thread(target=run, name='clm-download-cleanup', daemon=True).start()
 
 
-def mark_for_deletion(folder, now=None):
-    deadline = (time.time() if now is None else now) + RETENTION_SECONDS
+def mark_for_deletion(folder, now=None, *, confirmed=True):
+    retention = RETENTION_SECONDS if confirmed else UNCONFIRMED_RETENTION_SECONDS
+    deadline = (time.time() if now is None else now) + retention
     marker = folder / 'delete-after.json'
-    marker.write_text(json.dumps({'delete_after': deadline}), encoding='utf-8')
+    marker.write_text(json.dumps({'delete_after': deadline, 'status': 'confirmed' if confirmed else 'unconfirmed'}), encoding='utf-8')
 
 
 def configured_zones():
@@ -239,6 +252,7 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
         document.get_by_role('menuitem', name='Upload new version').click()
         dialog = document.get_by_role('dialog', name='Upload new version')
         dialog.locator('input[type=file]').set_input_files(str(path))
+        mark_for_deletion(folder, confirmed=False)
         pending.parent.mkdir(parents=True, exist_ok=True)
         # Keep the record durable before submitting; a crash must not silently retry.
         with pending.open('w', encoding='utf-8') as stream:

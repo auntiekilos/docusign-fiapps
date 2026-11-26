@@ -79,3 +79,37 @@ def test_download_exhaustion_is_recorded_without_fifth_attempt(tmp_path, monkeyp
         fileparts.download_for_upload(page, page, 'file.pdf', 'zone', 'id', 'https://example.test', lambda _: None)
     assert page.count == 4 and waits == [600, 600, 600]
     assert fileparts.read_attempt('zone', 'id')['attempts'] == 4
+
+
+def test_unconfirmed_upload_expires_after_two_minutes(tmp_path, monkeypatch):
+    from clm.fileparts import cleanup_confirmed_downloads
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    folder = tmp_path / 'downloads' / 'uncertain'
+    folder.mkdir(parents=True)
+    (folder / 'file').write_bytes(b'document')
+    mark_for_deletion(folder, now=100, confirmed=False)
+    cleanup_confirmed_downloads()
+    cleanup_expired(now=219)
+    assert folder.exists()
+    cleanup_expired(now=220)
+    assert not folder.exists()
+
+
+def test_full_disk_clears_confirmed_downloads_before_record_retry(tmp_path, monkeypatch):
+    import errno
+    from clm import fileparts
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    folder = tmp_path / 'downloads' / 'confirmed'
+    folder.mkdir(parents=True)
+    mark_for_deletion(folder, now=0)
+    original = fileparts._record_failure
+    calls = []
+    def fail_once(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError(errno.ENOSPC, 'disk full')
+        assert not folder.exists()
+        return original(*args, **kwargs)
+    monkeypatch.setattr(fileparts, '_record_failure', fail_once)
+    assert fileparts.record_failure('zone', '1', 'a', 'url', 'error')['attempts'] == 1
+    assert len(calls) == 2
