@@ -69,7 +69,7 @@ def test_login_error_stays_visible(monkeypatch):
     at = start(monkeypatch, "login_fail")
     at = at.button[0].click().run()
     assert "Sign-in was rejected." in html(at)
-    assert [b.label for b in at.button] == ["Try sign-in again"]
+    assert [b.label for b in at.button] == ["Sign in again"]
 
 
 def test_run_error_stays_visible_and_signs_out(monkeypatch):
@@ -83,23 +83,6 @@ def test_missing_zone_is_reported_without_login(monkeypatch):
     at = start(monkeypatch, zones="")
     at = at.button[0].click().run()
     assert "Set CLM_Zone" in html(at)
-
-
-def test_setup_list_has_six_fixed_slots_and_keeps_all_rows(monkeypatch):
-    class Many(Fake):
-        def login(self, url, progress=None):
-            for i in range(9):
-                progress(f"Step {i}")
-            raise ValueError("Sign-in was rejected.")
-
-    monkeypatch.setenv("CLM_Zone", "Zona Sur")
-    monkeypatch.setattr(clm.browser, "BrowserSession", Many)
-    st.cache_resource.clear()
-    at = AppTest.from_file(str(Path(__file__).parent.parent / "app.py"), default_timeout=20).run()
-    at = at.button[0].click().run()
-    page = html(at)
-    assert "--slots:6" in page
-    assert "Starting sign-in" in page and "Step 8" in page  # oldest row is not dropped
 
 
 def test_main_entrypoint_survives_button_reruns(monkeypatch):
@@ -132,9 +115,9 @@ def test_processing_error_details_are_visible_and_redacted(monkeypatch):
     at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
     at = at.button[0].click().run().button[0].click().run()
     assert not at.exception
-    assert len(at.code) == 1
-    assert 'diagnostic detail [REDACTED]' in at.code[0].value
-    assert 'secret-password' not in at.code[0].value
+    assert not at.code
+    assert 'diagnostic detail' not in html(at)
+    assert 'secret-password' not in html(at)
 
 
 def test_failed_document_is_not_reported_as_clean_completion(monkeypatch):
@@ -148,3 +131,22 @@ def test_failed_document_is_not_reported_as_clean_completion(monkeypatch):
     at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
     at = at.button[0].click().run().button[0].click().run()
     assert '0 processed. Complete with issues' in html(at)
+
+
+def test_diagnostics_are_not_displayed(monkeypatch):
+    class Logged(Fake):
+        def process_filepart(self, progress=None, screenshot=None, event=None):
+            assert screenshot is None
+            progress('internal diagnostic detail')
+            raise ValueError('Report stopped')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
+    monkeypatch.setattr(clm.browser, 'BrowserSession', Logged)
+    st.cache_resource.clear()
+    at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
+    at = at.button[0].click().run().button[0].click().run()
+    page = html(at)
+    assert 'Activity log' not in page
+    assert 'Browser screenshots' not in page
+    assert 'internal diagnostic detail' not in page
+    assert not at.code
+    assert 'Stopped: Report stopped' in page

@@ -18,14 +18,15 @@ CLM_PAGE = '''<!doctype html><html><head><style>
   <li id="file" role="menuitem"><span class="menuLabel body-l-bold">File</span></li>
 </ul></div></div></div></div>
 <input id="stale" class="fileUploadInput primaryFileUploadInput" type="file" style="display:none">
-<nav id="crumbs"></nav><table id="rows"></table>
+<nav id="crumbs"></nav><h1 id="current"></h1><table id="rows"></table>
 <script>
 const options = OPTIONS;
 const tree = {'Documents': ['Users'], 'Users': ['Internal'], 'Internal': ['Registro correcciones filepart'],
               'Registro correcciones filepart': ['Zona Sur'], 'Zona Sur': []};
 const path = ['Documents'];
 function render() {
-  document.getElementById('crumbs').innerHTML = path.map(n => `<a aria-label="Navigate to folder ${n}">${n}</a>`).join(' / ');
+  document.getElementById('crumbs').innerHTML = '<a aria-label="Navigate to folder Documents">Documents</a>';
+  document.getElementById('current').textContent = path.at(-1);
   const rows = document.getElementById('rows');
   rows.innerHTML = '';
   for (const name of tree[path.at(-1)]) {
@@ -105,7 +106,15 @@ def test_page_reproduces_input_intercepting_upload_hover(browser):
 def test_report_is_sent_through_input_covering_upload_label(browser, fast_waits, tmp_path):
     search = clm_page(browser)
     report = pending_report(tmp_path)
-    reports.upload_report(search, report, lambda _: None, lambda _: None)
+    snapshots = []
+    def capture(page):
+        snapshots.append((page.locator('#current').inner_text(),
+                          page.locator('#file input[type=file]').count(),
+                          page.locator('body').get_attribute('data-uploaded')))
+    reports.upload_report(search, report, lambda _: None, capture)
+    assert any(folder == 'Users' for folder, _, _ in snapshots)
+    assert any(folder == 'Zona Sur' and inputs == 1 for folder, inputs, _ in snapshots)
+    assert any(uploaded == report.name for _, _, uploaded in snapshots)
     # The folder lists the report only after the overlapping input receives it.
     assert state(tmp_path) == 'uploaded'
     assert search.context.pages == [search]
@@ -121,12 +130,9 @@ def test_report_missing_from_folder_stays_submitted(browser, fast_waits, monkeyp
 
 
 def test_report_without_upload_input_is_not_marked_submitted(browser, fast_waits, monkeypatch, tmp_path):
-    original = reports.open_menu_upload_input
-
     def short_wait(page):
-        page.locator(reports.UPLOAD_INPUT + ':visible').wait_for(state='visible', timeout=1500)
-        return original(page)
-    monkeypatch.setattr(reports, 'open_menu_upload_input', short_wait)
+        page.get_by_text('Upload', exact=True).wait_for(state='visible', timeout=1500)
+    monkeypatch.setattr(reports, 'open_upload_chooser', short_wait)
     search = clm_page(browser, input=False)
     report = pending_report(tmp_path)
     with pytest.raises(reports.ReportUnconfirmed, match=r'was not sent: 0 visible of 1 upload inputs'):
@@ -143,3 +149,23 @@ def test_folder_click_closes_delayed_walkthrough(browser):
     click_folder_with_walkthrough_retry(page, 'Users')
     assert page.locator('body').get_attribute('data-opened') == 'yes'
     assert page.locator('#walkthrough').count() == 0
+
+
+def test_report_upload_confirmation_dialog(browser, fast_waits, tmp_path):
+    page = browser.new_page()
+    page.set_content('''<div role="dialog">Upload report.csv
+        <button onclick="document.body.dataset.confirmed='yes'">Upload</button>
+    </div>''')
+    messages = []
+    reports.confirm_report_upload_if_prompted(page, tmp_path / 'report.csv', messages.append)
+    assert page.locator('body').get_attribute('data-confirmed') == 'yes'
+    assert any('confirming upload' in message for message in messages)
+
+
+def test_report_confirmation_ignores_unrelated_dialog(browser, fast_waits, tmp_path):
+    page = browser.new_page()
+    page.set_content('''<div role="dialog">Unrelated settings
+        <button onclick="document.body.dataset.clicked='yes'">Save</button>
+    </div>''')
+    reports.confirm_report_upload_if_prompted(page, tmp_path / 'report.csv', lambda _: None)
+    assert page.locator('body').get_attribute('data-clicked') is None

@@ -12,8 +12,8 @@ def test_reports_have_csv_quoting_and_persistent_zone_sequence(tmp_path, monkeyp
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
     first = create_page_report('Zona Sur', [entry()])
     second = create_page_report('Zona Sur', [entry()])
-    assert first.name == 'REPORT ZONA SUR 1 11:00.csv'
-    assert second.name == 'REPORT ZONA SUR 2 11:00.csv'
+    assert first.name == 'filepart_zona_sur_page_0001_20261126_110000.csv'
+    assert second.name == 'filepart_zona_sur_page_0002_20261126_110000.csv'
     with first.open(encoding='utf-8-sig', newline='') as stream:
         assert list(csv.DictReader(stream)) == [entry()]
 
@@ -29,7 +29,6 @@ def test_report_requires_full_path(tmp_path, monkeypatch):
 def test_report_is_uploaded_before_advancing_page(tmp_path, monkeypatch):
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
-    monkeypatch.setattr(fileparts, 'TEST_DOCUMENT_LIMIT', 10)
     events = []
     class Next:
         def count(self): return 1
@@ -53,8 +52,8 @@ def test_report_is_uploaded_before_advancing_page(tmp_path, monkeypatch):
     monkeypatch.setattr(reports, 'upload_report', lambda *args: events.append('uploaded'))
     with pytest.raises(RuntimeError, match='stop after advancing'):
         fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set())
-    assert events == ['processed', 'next']
-    assert list((tmp_path / 'page-journals').glob('*.jsonl'))
+    assert events == ['processed', 'uploaded', 'next']
+    assert not list((tmp_path / 'page-journals').glob('*.jsonl'))
 
 
 def test_total_report_includes_all_zone_history(tmp_path, monkeypatch):
@@ -189,6 +188,7 @@ def test_submitted_report_is_checked_without_resubmission(tmp_path, monkeypatch,
 
 def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkeypatch):
     from clm.reports import upload_report, write_state
+    monkeypatch.setattr('clm.reports.confirm_report_upload_if_prompted', lambda *args: None)
     monkeypatch.setenv('CLM_Zone', 'Zona Sur')
     target = tmp_path / 'report.csv'
     target.write_text('report')
@@ -205,7 +205,7 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
         def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
         @property
         def first(self): return self
-        def set_input_files(self, path): uploads.append(path)
+        def set_files(self, path): uploads.append(path)
     class Page:
         def __init__(self): self.context = self
         def new_page(self): return self
@@ -215,25 +215,31 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
             return Locator()
         def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
         def get_by_text(self, text, **kwargs): return Locator(text)
+        def expect_file_chooser(self, **kwargs): return self
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        @property
+        def value(self): return Locator()
         def wait_for_timeout(self, ms): visited.append(f'wait {ms}')
         def close(self): pass
     page = Page()
     page.url = 'https://example.test/search?aid=1'
     upload_report(page, target, lambda _: None, lambda _: None)
     assert 'Zona Sur' in visited and uploads == [str(target)]
-    assert visited.index('Zona Sur') < visited.index('wait 7000') < visited.index('wait 1000') < visited.index('File') < visited.index('wait 3000') < visited.index('file input')
+    assert visited.index('Zona Sur') < visited.index('wait 7000') < visited.index('wait 1000') < visited.index('File') < visited.index('wait 3000') < visited.index('Upload')
 
 
-def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
+def test_entire_first_page_is_reported(tmp_path, monkeypatch):
     import json
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
-    monkeypatch.setattr(fileparts, 'TEST_DOCUMENT_LIMIT', 10)
     monkeypatch.setattr(fileparts, 'select_search', lambda *a: None)
     monkeypatch.setattr(fileparts, 'page_results', lambda page: [(f'{i}.pdf', f'https://example.test/?Id={i}') for i in range(15)])
     processed, uploaded = [], []
     class Page:
         url = 'https://example.test/search'
+        def get_by_role(self, *args, **kwargs): return self
+        def count(self): return 0
     def process(page, name, url, zone, report, snapshot, journal):
         doc_id = url.split('=')[-1]
         item = entry()
@@ -244,23 +250,23 @@ def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
         return doc_id
     monkeypatch.setattr(fileparts, 'process_document', process)
     monkeypatch.setattr(reports, 'upload_report', lambda page, path, *args: uploaded.append(path.read_text(encoding='utf-8-sig')))
-    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 10
-    assert processed == [str(i) for i in range(10)]
-    assert len(uploaded) == 1 and '9.pdf' in uploaded[0] and '10.pdf' not in uploaded[0]
+    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 15
+    assert processed == [str(i) for i in range(15)]
+    assert len(uploaded) == 1 and '14.pdf' in uploaded[0]
+    assert len(uploaded[0].splitlines()) == 16
 
 
-def test_ten_lines_across_pages_produce_one_report(tmp_path, monkeypatch):
+def test_uploads_one_report_per_page(tmp_path, monkeypatch):
     import json
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
-    monkeypatch.setattr(fileparts, 'TEST_DOCUMENT_LIMIT', 10)
     monkeypatch.setattr(fileparts, 'select_search', lambda *a: None)
     class Page:
         url = 'https://example.test/search'
         index = 0
         def get_by_role(self, *args, **kwargs): return self
         def count(self): return 1
-        def is_disabled(self): return False
+        def is_disabled(self): return self.index >= 1
         def click(self): self.index += 1
         def wait_for_function(self, *args, **kwargs): pass
     page = Page()
@@ -273,11 +279,31 @@ def test_ten_lines_across_pages_produce_one_report(tmp_path, monkeypatch):
     monkeypatch.setattr(fileparts, 'process_document', process)
     uploads = []
     monkeypatch.setattr(reports, 'upload_report', lambda page, path, *args: uploads.append(path.read_text(encoding='utf-8-sig')))
-    assert fileparts.process_zone(page, lambda _: None, lambda _: None, 'Zona Sur', set()) == 10
-    assert page.index == 1 and len(uploads) == 1
-    assert '9.pdf' in uploads[0] and '10.pdf' not in uploads[0]
+    assert fileparts.process_zone(page, lambda _: None, lambda _: None, 'Zona Sur', set()) == 15
+    assert page.index == 1 and len(uploads) == 2
+    assert '5.pdf' in uploads[0] and '6.pdf' not in uploads[0]
+    assert '6.pdf' in uploads[1] and '14.pdf' in uploads[1]
 
 
-def test_configured_test_limit_is_one():
-    from clm.fileparts import TEST_DOCUMENT_LIMIT
-    assert TEST_DOCUMENT_LIMIT == 1
+def test_report_failure_stops_before_next_page(tmp_path, monkeypatch):
+    import json
+    from clm import fileparts, reports
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(fileparts, 'select_search', lambda *args: None)
+    monkeypatch.setattr(fileparts, 'page_results', lambda page: [('a.pdf', 'https://example.test/?Id=1')])
+    class Page:
+        url = 'https://example.test/search'
+        def get_by_role(self, *args, **kwargs):
+            raise AssertionError('Must not advance after a report failure')
+    def process(page, name, url, zone, report, snapshot, journal):
+        item = entry()
+        item.update(filename=name, document_url=url, document_id='1')
+        journal.write_text(json.dumps(item) + '\n')
+        return '1'
+    def fail_report(*args):
+        raise reports.ReportUnconfirmed('Upload uncertain')
+    monkeypatch.setattr(fileparts, 'process_document', process)
+    monkeypatch.setattr(reports, 'upload_report', fail_report)
+    with pytest.raises(reports.ReportUnconfirmed, match='Upload uncertain'):
+        fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set())
+    assert list((tmp_path / 'page-journals').glob('*.jsonl'))

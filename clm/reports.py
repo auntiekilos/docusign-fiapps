@@ -54,7 +54,7 @@ def create_page_report(zone, entries):
     last_time = datetime.fromisoformat(entries[-1]['processed_at'].replace('Z', '+00:00'))
     if last_time.tzinfo is None:
         raise ValueError('Report timestamps must include a timezone.')
-    filename = f"REPORT {safe_zone.upper()} {number} {last_time.astimezone(ZoneInfo('Europe/Madrid')):%H:%M}.csv"
+    filename = f"filepart_{safe_zone.replace(' ', '_').lower()}_page_{number:04d}_{last_time.astimezone(ZoneInfo('Europe/Madrid')):%Y%m%d_%H%M%S}.csv"
     target = folder / filename
     try:
         with target.open('x', encoding='utf-8-sig', newline='') as stream:
@@ -95,16 +95,31 @@ def click_folder_with_walkthrough_retry(page, folder):
 UPLOAD_INPUT = 'input[type=file].primaryFileUploadInput'
 
 
-def open_menu_upload_input(page):
-    """Return the one file input shown over the File menu's Upload item.
+def open_upload_chooser(page):
+    """Open the native chooser using the Upload menu item."""
+    with page.expect_file_chooser(timeout=30000) as chooser:
+        page.get_by_text('Upload', exact=True).click(timeout=30000, force=True)
+    return chooser.value
 
-    DocuSign places a transparent input on top of the Upload label. Hovering or
-    clicking the label fails because the input intercepts pointer events, and
-    other hidden upload inputs can exist on the page.
-    """
-    upload = page.locator(UPLOAD_INPUT + ':visible')
-    upload.wait_for(state='visible', timeout=30000)
-    return upload
+
+def confirm_report_upload_if_prompted(page, report_path, report):
+    """Confirm an upload-specific dialog if DocuSign displays one."""
+    page.wait_for_timeout(3000)
+    upload_dialog = page.get_by_role('dialog').filter(
+        has_text=re.compile(r'upload|' + re.escape(report_path.name), re.IGNORECASE)
+    )
+    buttons = upload_dialog.get_by_role('button', name=re.compile(
+        r'^(upload|accept|send|complete|confirm|ok|save)$', re.IGNORECASE
+    )).and_(page.locator(':visible'))
+    count = buttons.count()
+    if count > 1:
+        raise ValueError('Multiple report upload confirmation buttons are visible; cannot choose safely.')
+    if count == 1:
+        label = buttons.inner_text().strip()
+        report(f'Report: confirming upload with {label}.')
+        buttons.click(timeout=10000)
+    else:
+        report('Report: no upload confirmation dialog found.')
 
 
 def upload_input_summary(page):
@@ -126,19 +141,38 @@ def upload_report(search_page, report_path, report, snapshot):
             raise ValueError('The search page has no DocuSign account ID.')
         documents_url = urlunsplit((parts.scheme, parts.netloc, '/atlas/Documents/BrowseDocuments.aspx',
                                    urlencode({'aid': account[0]}), ''))
+        report('Report: opening Documents in a new tab.')
         page.goto(documents_url, wait_until='domcontentloaded')
+        report('Report: Documents page loaded; waiting for folder list.')
+        snapshot(page)
         def dismiss():
             close = page.locator('#walkthrough button.ux-modal__close')
             if close.is_visible():
+                report('Report: closing walkthrough popup.')
                 close.click(force=True)
+                snapshot(page)
         dismiss()
         page.locator('a[aria-label^="Navigate to folder "]').first.wait_for(timeout=30000)
+        report('Report: folder list ready.')
+        snapshot(page)
         from clm.fileparts import configured_zones
-        for folder in (*REPORT_FOLDERS, configured_zones()[0]):
+        folders = (*REPORT_FOLDERS, configured_zones()[0])
+        for index, folder in enumerate(folders):
             dismiss()
+            report(f'Report: opening folder {folder}.')
             click_folder_with_walkthrough_retry(page, folder)
-            page.locator('a[aria-label="Navigate to folder ' + folder + '"]').wait_for(timeout=30000)
+            snapshot(page)
+            if index + 1 < len(folders):
+                next_folder = folders[index + 1]
+                report(f'Report: clicked {folder}; waiting for {next_folder}.')
+                page.get_by_role('row').get_by_role('link', name=next_folder, exact=True).wait_for(state='visible', timeout=30000)
+                report(f'Report: found {next_folder} inside {folder}.')
+            else:
+                report(f'Report: clicked destination folder {folder}; waiting before opening File.')
+            snapshot(page)
+        report('Report: waiting seven seconds for the walkthrough.')
         page.wait_for_timeout(7000)
+        snapshot(page)
         dismiss()
         page.wait_for_timeout(1000)
         snapshot(page)
@@ -149,6 +183,7 @@ def upload_report(search_page, report_path, report, snapshot):
         if status in ('submitted', 'uploaded'):
             if existing.count():
                 write_state(state, {'status': 'uploaded', 'filename': report_path.name})
+                snapshot(page)
                 return
             if 'retry_after' not in saved:
                 saved['retry_after'] = time.time() + REPORT_RETRY_SECONDS
@@ -161,9 +196,16 @@ def upload_report(search_page, report_path, report, snapshot):
             raise ValueError(f'Report {report_path.name} already exists in DocuSign. Check it before continuing.')
         report(f'Uploading report {report_path.name}.')
         try:
+            report('Report: clicking File.')
             page.get_by_role('menuitem', name='File', exact=True).click()
+            snapshot(page)
+            report('Report: clicked File; waiting three seconds.')
             page.wait_for_timeout(3000)
-            upload = open_menu_upload_input(page)
+            snapshot(page)
+            report('Report: clicking Upload to open the file chooser.')
+            upload = open_upload_chooser(page)
+            report('Report: file chooser opened.')
+            snapshot(page)
         except Exception as exc:
             # Nothing was sent, so the report stays pending and can be sent again.
             snapshot(page)
@@ -171,14 +213,24 @@ def upload_report(search_page, report_path, report, snapshot):
         write_state(state, {'status': 'submitted', 'filename': report_path.name,
                             'retry_after': time.time() + REPORT_RETRY_SECONDS})
         try:
-            # The input covers the Upload label, so it receives the file directly.
-            upload.set_input_files(str(report_path))
+            report('Report: selecting the report in the file chooser.')
+            upload.set_files(str(report_path))
+            snapshot(page)
+            report('Report: file selected; checking for upload confirmation.')
+            snapshot(page)
+            confirm_report_upload_if_prompted(page, report_path, report)
+            snapshot(page)
+            report('Report: waiting for the file to appear in the folder.')
             existing.wait_for(timeout=REPORT_CONFIRM_MS)
         except Exception as exc:
             snapshot(page)
             raise ReportUnconfirmed(f'Report {report_path.name} was not confirmed.') from exc
         write_state(state, {'status': 'uploaded', 'filename': report_path.name})
+        report('Report: uploaded file is visible in the folder.')
         snapshot(page)
+    except Exception:
+        snapshot(page)
+        raise
     finally:
         page.close()
 
