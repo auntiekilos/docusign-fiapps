@@ -236,7 +236,7 @@ def run_zone():
     ss.notice, ss.notice_bad = "", False
     ss.diagnostic = ""
     index = {}
-    state = {"done": 0, "status": "", "issue_count": None}
+    state = {"done": 0, "status": "", "issue_count": None, "failed": False}
 
     def count():
         return f"{state['done']} processed" + (f" · {state['status']}" if state["status"] else "")
@@ -265,6 +265,7 @@ def run_zone():
                     state["done"] += 1
                 row.update(finish=clock(item.get("processed_at")), path=item.get("docusign_path"), error=None)
             else:
+                state["failed"] = True
                 attempts = item.get("attempts")
                 reason = str(item.get("reason") or "Unknown error")
                 row.update(finish=None, path=None, error=f"{reason} (attempt {attempts} of {item.get('max_attempts', MAX_ATTEMPTS)})" if attempts else reason)
@@ -286,7 +287,7 @@ def run_zone():
         total = browser_session().process_filepart(progress, None, event)
         state["status"] = ""
         count_done = state["done"] if total is None else total
-        completion = "Complete with issues" if state["issue_count"] else "Complete"
+        completion = "Complete with issues" if state["failed"] or state["issue_count"] else "Complete"
         ss.notice = f"{count_done} processed. {completion}"
         write_log(ss.notice)
     except ValueError as exc:

@@ -135,3 +135,16 @@ def test_processing_error_details_are_visible_and_redacted(monkeypatch):
     assert len(at.code) == 1
     assert 'diagnostic detail [REDACTED]' in at.code[0].value
     assert 'secret-password' not in at.code[0].value
+
+
+def test_failed_document_is_not_reported_as_clean_completion(monkeypatch):
+    class OneFailure(Fake):
+        def process_filepart(self, progress=None, screenshot=None, event=None):
+            event({'type': 'document_failed', 'document_id': '1', 'name': 'a.pdf', 'reason': 'Download failed'})
+            return 0
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
+    monkeypatch.setattr(clm.browser, 'BrowserSession', OneFailure)
+    st.cache_resource.clear()
+    at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
+    at = at.button[0].click().run().button[0].click().run()
+    assert '0 processed. Complete with issues' in html(at)
