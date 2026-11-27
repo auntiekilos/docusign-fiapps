@@ -113,6 +113,9 @@ def upload_report(search_page, report_path, report, snapshot):
             dismiss()
             click_folder_with_walkthrough_retry(page, folder)
             page.locator('a[aria-label="Navigate to folder ' + folder + '"]').wait_for(timeout=30000)
+        page.wait_for_timeout(7000)
+        dismiss()
+        page.wait_for_timeout(1000)
         snapshot(page)
         existing = page.get_by_role('row').get_by_role('link', name=report_path.name, exact=True)
         state = report_path.parent / 'state.json'

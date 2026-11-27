@@ -176,6 +176,7 @@ def test_submitted_report_is_checked_without_resubmission(tmp_path, monkeypatch,
         def goto(self, *args, **kwargs): pass
         def locator(self, *args, **kwargs): return Locator()
         def get_by_role(self, *args, **kwargs): return Locator()
+        def wait_for_timeout(self, ms): pass
         def close(self): pass
     search = Page()
     search.url = 'https://example.test/search?aid=1'
@@ -220,7 +221,7 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
     page.url = 'https://example.test/search?aid=1'
     upload_report(page, target, lambda _: None, lambda _: None)
     assert 'Zona Sur' in visited and uploads == [str(target)]
-    assert visited.index('File') < visited.index('wait 3000') < visited.index('hover Upload') < visited.index('file input')
+    assert visited.index('Zona Sur') < visited.index('wait 7000') < visited.index('wait 1000') < visited.index('File') < visited.index('wait 3000') < visited.index('hover Upload') < visited.index('file input')
 
 
 def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
