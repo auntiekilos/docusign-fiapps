@@ -213,3 +213,27 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
     page.url = 'https://example.test/search?aid=1'
     upload_report(page, target, lambda _: None, lambda _: None)
     assert 'Zona Sur' in visited and uploads == [str(target)]
+
+
+def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
+    import json
+    from clm import fileparts, reports
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(fileparts, 'select_search', lambda *a: None)
+    monkeypatch.setattr(fileparts, 'page_results', lambda page: [(f'{i}.pdf', f'https://example.test/?Id={i}') for i in range(15)])
+    processed, uploaded = [], []
+    class Page:
+        url = 'https://example.test/search'
+    def process(page, name, url, zone, report, snapshot, journal):
+        doc_id = url.split('=')[-1]
+        item = entry()
+        item.update(filename=name, document_url=url, document_id=doc_id)
+        with journal.open('a') as stream:
+            stream.write(json.dumps(item) + '\n')
+        processed.append(doc_id)
+        return doc_id
+    monkeypatch.setattr(fileparts, 'process_document', process)
+    monkeypatch.setattr(reports, 'upload_report', lambda page, path, *args: uploaded.append(path.read_text(encoding='utf-8-sig')))
+    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 10
+    assert processed == [str(i) for i in range(10)]
+    assert len(uploaded) == 1 and '9.pdf' in uploaded[0] and '10.pdf' not in uploaded[0]

@@ -263,6 +263,8 @@ class BrowserSession:
                 try:
                     return self._operation(name, progress, screenshot, event)
                 except ReportUnconfirmed:
+                    if name == "filepart":
+                        raise
                     if progress:
                         progress("Report not confirmed. Waiting 5 minutes before checking it in a fresh browser.")
                     time.sleep(REPORT_RETRY_SECONDS)
@@ -279,8 +281,7 @@ class BrowserSession:
                 count = operation_with_report_retry("filepart")
                 if count > 0:
                     total += count
-                if count == 0:
-                    operation_with_report_retry("total")
+                if count >= 0:
                     return total
                 if progress:
                     progress("Waiting 10 minutes for DocuSign before a clean search.")

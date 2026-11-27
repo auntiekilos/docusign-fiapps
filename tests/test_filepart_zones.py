@@ -43,9 +43,8 @@ def test_clean_search_restarts_browser_and_closes_after_total(monkeypatch):
     session._operation = operation
     session.login = login
     monkeypatch.setattr('clm.browser.time.sleep', lambda seconds: events.append(('wait', seconds)))
-    assert session.process_filepart() == 6
-    assert events == ['filepart', ('wait', 600), 'close', 'login', 'filepart', ('wait', 600), 'close', 'login',
-                      'filepart', 'total', 'close']
+    assert session.process_filepart() == 4
+    assert events == ['filepart', 'close']
 
 
 def test_browser_closes_when_processing_fails(monkeypatch):

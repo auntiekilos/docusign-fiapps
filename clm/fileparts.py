@@ -15,6 +15,7 @@ RETENTION_SECONDS = 4 * 60 * 60
 UNCONFIRMED_RETENTION_SECONDS = 2 * 60
 MAX_ATTEMPTS = 4  # More than three attempts means four total attempts.
 UPLOAD_CONFIRM_SECONDS = 45
+TEST_DOCUMENT_LIMIT = 10
 DOWNLOAD_RETRY_SECONDS = 10 * 60
 
 
@@ -400,7 +401,12 @@ def process_zone(page, report, snapshot, zone, known, event=None):
                 attempt_path(zone, document_id).unlink(missing_ok=True)
                 batch_new += 1
                 total += 1
+                if total >= TEST_DOCUMENT_LIMIT:
+                    break
             finish_page_report(page, journal, zone, known, report, snapshot, event)
+            if total >= TEST_DOCUMENT_LIMIT:
+                report(f'Test limit of {TEST_DOCUMENT_LIMIT} documents reached.')
+                return total
             next_page = page.get_by_role('button', name='Go to next page')
             if not next_page.count() or next_page.is_disabled():
                 break

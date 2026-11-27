@@ -33,7 +33,7 @@ def test_process_holds_lock_through_final_upload_and_close(tmp_path, monkeypatch
 
     session._operation = operation
     assert session.process_filepart() == 0
-    assert operations == ['filepart', 'total', 'close']
+    assert operations == ['filepart', 'close']
 
 
 def test_processing_lock_rejects_another_process(tmp_path, monkeypatch):
