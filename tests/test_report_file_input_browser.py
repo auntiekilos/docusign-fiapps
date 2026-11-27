@@ -106,7 +106,15 @@ def test_page_reproduces_input_intercepting_upload_hover(browser):
 def test_report_is_sent_through_input_covering_upload_label(browser, fast_waits, tmp_path):
     search = clm_page(browser)
     report = pending_report(tmp_path)
-    reports.upload_report(search, report, lambda _: None, lambda _: None)
+    snapshots = []
+    def capture(page):
+        snapshots.append((page.locator('#current').inner_text(),
+                          page.locator('#file input[type=file]').count(),
+                          page.locator('body').get_attribute('data-uploaded')))
+    reports.upload_report(search, report, lambda _: None, capture)
+    assert any(folder == 'Users' for folder, _, _ in snapshots)
+    assert any(folder == 'Zona Sur' and inputs == 1 for folder, inputs, _ in snapshots)
+    assert any(uploaded == report.name for _, _, uploaded in snapshots)
     # The folder lists the report only after the overlapping input receives it.
     assert state(tmp_path) == 'uploaded'
     assert search.context.pages == [search]

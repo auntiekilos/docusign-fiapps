@@ -150,15 +150,18 @@ def upload_report(search_page, report_path, report, snapshot):
             if close.is_visible():
                 report('Report: closing walkthrough popup.')
                 close.click(force=True)
+                snapshot(page)
         dismiss()
         page.locator('a[aria-label^="Navigate to folder "]').first.wait_for(timeout=30000)
         report('Report: folder list ready.')
+        snapshot(page)
         from clm.fileparts import configured_zones
         folders = (*REPORT_FOLDERS, configured_zones()[0])
         for index, folder in enumerate(folders):
             dismiss()
             report(f'Report: opening folder {folder}.')
             click_folder_with_walkthrough_retry(page, folder)
+            snapshot(page)
             if index + 1 < len(folders):
                 next_folder = folders[index + 1]
                 report(f'Report: clicked {folder}; waiting for {next_folder}.')
@@ -169,6 +172,7 @@ def upload_report(search_page, report_path, report, snapshot):
             snapshot(page)
         report('Report: waiting seven seconds for the walkthrough.')
         page.wait_for_timeout(7000)
+        snapshot(page)
         dismiss()
         page.wait_for_timeout(1000)
         snapshot(page)
@@ -179,6 +183,7 @@ def upload_report(search_page, report_path, report, snapshot):
         if status in ('submitted', 'uploaded'):
             if existing.count():
                 write_state(state, {'status': 'uploaded', 'filename': report_path.name})
+                snapshot(page)
                 return
             if 'retry_after' not in saved:
                 saved['retry_after'] = time.time() + REPORT_RETRY_SECONDS
@@ -193,12 +198,14 @@ def upload_report(search_page, report_path, report, snapshot):
         try:
             report('Report: clicking File.')
             page.get_by_role('menuitem', name='File', exact=True).click()
+            snapshot(page)
             report('Report: clicked File; waiting three seconds.')
             page.wait_for_timeout(3000)
             snapshot(page)
             report('Report: clicking Upload to open the file chooser.')
             upload = open_upload_chooser(page)
             report('Report: file chooser opened.')
+            snapshot(page)
         except Exception as exc:
             # Nothing was sent, so the report stays pending and can be sent again.
             snapshot(page)
@@ -208,6 +215,7 @@ def upload_report(search_page, report_path, report, snapshot):
         try:
             report('Report: selecting the report in the file chooser.')
             upload.set_files(str(report_path))
+            snapshot(page)
             report('Report: file selected; checking for upload confirmation.')
             snapshot(page)
             confirm_report_upload_if_prompted(page, report_path, report)
@@ -220,6 +228,9 @@ def upload_report(search_page, report_path, report, snapshot):
         write_state(state, {'status': 'uploaded', 'filename': report_path.name})
         report('Report: uploaded file is visible in the folder.')
         snapshot(page)
+    except Exception:
+        snapshot(page)
+        raise
     finally:
         page.close()
 
