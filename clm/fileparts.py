@@ -243,36 +243,45 @@ def document_path(document, name, zone):
 
 
 def watch_upload_confirmation(document):
-    """Observe transient success notices before submitting the new version."""
-    document.evaluate("""() => {
+    """Capture upload notices even when DocuSign reloads the document page."""
+    from uuid import uuid4
+    key = '__clm_upload_' + uuid4().hex
+    document.evaluate('(key) => sessionStorage.removeItem(key)', key)
+    setup = """(key) => {
+        if (window.top !== window) return;
         const messages = new Set(['Document uploaded', 'Success! Your document has been checked in.']);
-        window.__clmUploadConfirmed = false;
-        if (window.__clmUploadObserver) window.__clmUploadObserver.disconnect();
-        const inspect = node => {
-            if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
-            if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
-            const elements = [node, ...node.querySelectorAll('*')];
-            for (const element of elements) {
-                if (element.getClientRects().length && messages.has(element.textContent.trim())) {
-                    window.__clmUploadConfirmed = true;
-                    return;
+        const start = (scanExisting) => {
+            if (window.__clmUploadObserver) window.__clmUploadObserver.disconnect();
+            const inspect = node => {
+                if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+                if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
+                for (const element of [node, ...node.querySelectorAll('*')]) {
+                    if (element.getClientRects().length && messages.has(element.textContent.trim())) {
+                        sessionStorage.setItem(key, 'confirmed');
+                        return;
+                    }
                 }
-            }
+            };
+            window.__clmUploadObserver = new MutationObserver(records => {
+                for (const record of records) {
+                    for (const node of record.addedNodes) inspect(node);
+                    if (record.type === 'characterData' || record.type === 'attributes') inspect(record.target);
+                }
+            });
+            window.__clmUploadObserver.observe(document.body, {subtree: true, childList: true, characterData: true, attributes: true});
+            if (scanExisting) inspect(document.body);
         };
-        window.__clmUploadObserver = new MutationObserver(records => {
-            for (const record of records) {
-                for (const node of record.addedNodes) inspect(node);
-                if (record.type === 'characterData') inspect(record.target);
-                if (record.type === 'attributes') inspect(record.target);
-            }
-        });
-        window.__clmUploadObserver.observe(document.body, {subtree: true, childList: true, characterData: true, attributes: true});
-    }""")
+        if (document.body) start(false);
+        else document.addEventListener('DOMContentLoaded', () => start(true), {once: true});
+    }"""
+    document.add_init_script(f'({setup})({json.dumps(key)});')
+    document.evaluate(setup, key)
+    return key
 
 
-def wait_for_upload_confirmation(document, timeout):
-    document.wait_for_function('() => window.__clmUploadConfirmed === true', timeout=timeout)
-    document.evaluate('() => { if (window.__clmUploadObserver) window.__clmUploadObserver.disconnect(); }')
+def wait_for_upload_confirmation(document, timeout, key):
+    document.wait_for_function('(key) => sessionStorage.getItem(key) === "confirmed"', arg=key, timeout=timeout)
+    document.evaluate('(key) => { if (window.__clmUploadObserver) window.__clmUploadObserver.disconnect(); sessionStorage.removeItem(key); }', key)
 
 
 def process_document(page, name, url, zone, report, snapshot, journal=None):
@@ -305,12 +314,12 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
                        'upload_attempt': 1}, stream)
             stream.flush()
             os.fsync(stream.fileno())
-        watch_upload_confirmation(document)
+        confirmation_key = watch_upload_confirmation(document)
         deadline = time.monotonic() + UPLOAD_CONFIRM_SECONDS
         try:
             dialog.get_by_role('button', name='Submit').click(timeout=UPLOAD_CONFIRM_SECONDS * 1000)
             remaining = max(1, int((deadline - time.monotonic()) * 1000))
-            wait_for_upload_confirmation(document, remaining)
+            wait_for_upload_confirmation(document, remaining, confirmation_key)
         except Timeout as exc:
             raise UploadUnconfirmed(f'Upload of {name} was not confirmed within 45 seconds.') from exc
         mark_for_deletion(folder)
