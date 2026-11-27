@@ -29,6 +29,7 @@ def test_report_requires_full_path(tmp_path, monkeypatch):
 def test_report_is_uploaded_before_advancing_page(tmp_path, monkeypatch):
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(fileparts, 'TEST_DOCUMENT_LIMIT', 10)
     events = []
     class Next:
         def count(self): return 1
@@ -202,7 +203,7 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
         def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
         @property
         def first(self): return self
-        def set_input_files(self, path): uploads.append(path)
+        def set_files(self, path): uploads.append(path)
     class Page:
         def __init__(self): self.context = self
         def new_page(self): return self
@@ -210,6 +211,11 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
         def locator(self, *args, **kwargs): return Locator()
         def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
         def close(self): pass
+        def expect_file_chooser(self, **kwargs): return self
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        @property
+        def value(self): return Locator()
     page = Page()
     page.url = 'https://example.test/search?aid=1'
     upload_report(page, target, lambda _: None, lambda _: None)
@@ -220,6 +226,7 @@ def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
     import json
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(fileparts, 'TEST_DOCUMENT_LIMIT', 10)
     monkeypatch.setattr(fileparts, 'select_search', lambda *a: None)
     monkeypatch.setattr(fileparts, 'page_results', lambda page: [(f'{i}.pdf', f'https://example.test/?Id={i}') for i in range(15)])
     processed, uploaded = [], []
@@ -244,6 +251,7 @@ def test_ten_lines_across_pages_produce_one_report(tmp_path, monkeypatch):
     import json
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(fileparts, 'TEST_DOCUMENT_LIMIT', 10)
     monkeypatch.setattr(fileparts, 'select_search', lambda *a: None)
     class Page:
         url = 'https://example.test/search'
@@ -266,3 +274,8 @@ def test_ten_lines_across_pages_produce_one_report(tmp_path, monkeypatch):
     assert fileparts.process_zone(page, lambda _: None, lambda _: None, 'Zona Sur', set()) == 10
     assert page.index == 1 and len(uploads) == 1
     assert '9.pdf' in uploads[0] and '10.pdf' not in uploads[0]
+
+
+def test_configured_test_limit_is_one():
+    from clm.fileparts import TEST_DOCUMENT_LIMIT
+    assert TEST_DOCUMENT_LIMIT == 1

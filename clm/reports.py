@@ -118,11 +118,12 @@ def upload_report(search_page, report_path, report, snapshot):
         if existing.count():
             raise ValueError(f'Report {report_path.name} already exists in DocuSign. Check it before continuing.')
         report(f'Uploading report {report_path.name}.')
-        page.get_by_role('menuitem', name='File', exact=True).click()
-        write_state(state, {'status': 'submitted', 'filename': report_path.name,
-                            'retry_after': time.time() + REPORT_RETRY_SECONDS})
         try:
-            page.locator('li.fileUploadButton input[type=file]').set_input_files(str(report_path))
+            with page.expect_file_chooser(timeout=30000) as chooser:
+                page.get_by_role('menuitem', name='File', exact=True).click()
+            write_state(state, {'status': 'submitted', 'filename': report_path.name,
+                                'retry_after': time.time() + REPORT_RETRY_SECONDS})
+            chooser.value.set_files(str(report_path))
             existing.wait_for(timeout=120000)
         except Exception as exc:
             raise ReportUnconfirmed(f'Report {report_path.name} was not confirmed.') from exc
