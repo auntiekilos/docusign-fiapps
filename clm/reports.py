@@ -54,7 +54,7 @@ def create_page_report(zone, entries):
     last_time = datetime.fromisoformat(entries[-1]['processed_at'].replace('Z', '+00:00'))
     if last_time.tzinfo is None:
         raise ValueError('Report timestamps must include a timezone.')
-    filename = f"REPORT {safe_zone.upper()} {number} {last_time.astimezone(ZoneInfo('Europe/Madrid')):%H-%M}.csv"
+    filename = f"filepart_{safe_zone.replace(' ', '_').lower()}_page_{number:04d}_{last_time.astimezone(ZoneInfo('Europe/Madrid')):%Y%m%d_%H%M%S}.csv"
     target = folder / filename
     try:
         with target.open('x', encoding='utf-8-sig', newline='') as stream:

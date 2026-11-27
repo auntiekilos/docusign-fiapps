@@ -27,24 +27,29 @@ def test_process_one_uses_configured_zone(monkeypatch):
     assert calls == [('Zona Sur', {'already-done'})]
 
 
-def test_clean_search_restarts_browser_and_closes_after_total(monkeypatch):
+def test_scan_restarts_browser_and_waits_when_empty(monkeypatch):
     from clm.browser import BrowserSession
     monkeypatch.setenv('CLM_Zone', 'Zona Sur')
     monkeypatch.setenv('CLM_URL', 'https://example.test')
     session = object.__new__(BrowserSession)
     events = []
-    counts = iter([4, 2, 0])
+    counts = iter([4, 0])
     def operation(name, *args):
         events.append(name)
-        return next(counts) if name == 'filepart' else None
+        if name == 'filepart':
+            try:
+                return next(counts)
+            except StopIteration:
+                raise ValueError('test stop')
     def login(*args):
         events.append('login')
         return 'signed_in', None
     session._operation = operation
     session.login = login
     monkeypatch.setattr('clm.browser.time.sleep', lambda seconds: events.append(('wait', seconds)))
-    assert session.process_filepart() == 4
-    assert events == ['filepart', 'close']
+    with pytest.raises(ValueError, match='test stop'):
+        session.process_filepart()
+    assert events == ['filepart', 'close', 'login', 'filepart', 'close', ('wait', 60), 'login', 'filepart', 'close']
 
 
 def test_browser_closes_when_processing_fails(monkeypatch):

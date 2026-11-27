@@ -32,8 +32,11 @@ def test_process_holds_lock_through_final_upload_and_close(tmp_path, monkeypatch
         return 0 if name == 'filepart' else None
 
     session._operation = operation
-    assert session.process_filepart() == 0
-    assert operations == ['filepart', 'close']
+    def stop(_): raise RuntimeError('stop test')
+    monkeypatch.setattr('clm.browser.time.sleep', stop)
+    with pytest.raises(RuntimeError, match='stop test'):
+        session.process_filepart()
+    assert operations == ['filepart', 'close', 'close']
 
 
 def test_processing_lock_rejects_another_process(tmp_path, monkeypatch):

@@ -258,34 +258,21 @@ class BrowserSession:
         from clm.fileparts import configured_zones
         from clm.recovery import preserve_interrupted_uploads
         preserve_interrupted_uploads(configured_zones()[0])
-        from clm.reports import ReportUnconfirmed, REPORT_RETRY_SECONDS
         total = 0
-        def operation_with_report_retry(name):
-            while True:
-                try:
-                    return self._operation(name, progress, screenshot, event)
-                except ReportUnconfirmed:
-                    if name == "filepart":
-                        raise
-                    if progress:
-                        progress("Report not confirmed. Waiting 5 minutes before checking it in a fresh browser.")
-                    time.sleep(REPORT_RETRY_SECONDS)
-                    self._operation("close", progress, screenshot)
-                    result, image = self.login(os.environ.get("CLM_URL", ""), progress)
-                    if screenshot and image:
-                        screenshot(image)
-                    if result != "signed_in":
-                        raise ValueError("Sign-in not confirmed after browser restart.")
-                    if name == "total":
-                        self._operation("prepare_search", progress, screenshot, event)
         try:
             while True:
-                count = operation_with_report_retry("filepart")
-                if count > 0:
-                    total += count
-                return total
+                count = self._operation("filepart", progress, None, event)
+                total += max(count, 0)
+                self._operation("close", progress, None)
+                if count == 0:
+                    if progress:
+                        progress("No new documents. Waiting before the next scan.")
+                    time.sleep(60)
+                result, _ = self.login(os.environ.get("CLM_URL", ""), progress)
+                if result != "signed_in":
+                    raise ValueError("Sign-in could not be confirmed for the next scan.")
         finally:
-            self._operation("close", progress, screenshot)
+            self._operation("close", progress, None)
 
     def _run(self):
         playwright = browser = context = None
@@ -338,12 +325,10 @@ class BrowserSession:
                     from clm.fileparts import process_one
                     page = context.pages[0]
                     result = process_one(page, lambda value: updates.put(("progress", value)),
-                                         lambda current: updates.put(("screenshot", page_image(current))),
+                                         lambda current: None,
                                          event=lambda value: updates.put(("event", value)))
                     future.set_result(result)
                 except Exception as exc:
-                    if context is not None and context.pages:
-                        updates.put(("screenshot", page_image(context.pages[0])))
                     write_log("Browser processing failed", exception=True)
                     if isinstance(exc, ValueError):
                         future.set_exception(exc)
@@ -429,11 +414,11 @@ class BrowserSession:
                 report("Checking whether sign-in succeeded.")
                 result = "signed_in" if confirmed_login(page, on_target) else "unverified"
                 log_status("Sign-in confirmed." if result == "signed_in" else "Sign-in not confirmed.")
-                future.set_result((result, page_image(page)))
+                future.set_result((result, None))
             except Exception as exc:
                 write_log(f"Sign-in failed while {stage}", exception=True)
                 message = str(exc) if isinstance(exc, ValueError) else f"Could not complete sign-in while {stage}."
                 log_status(message)
-                future.set_exception(LoginError(message, page_image(page)))
+                future.set_exception(LoginError(message))
             finally:
                 username = password = None

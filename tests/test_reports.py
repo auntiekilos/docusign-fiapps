@@ -12,8 +12,8 @@ def test_reports_have_csv_quoting_and_persistent_zone_sequence(tmp_path, monkeyp
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
     first = create_page_report('Zona Sur', [entry()])
     second = create_page_report('Zona Sur', [entry()])
-    assert first.name == 'REPORT ZONA SUR 1 11-00.csv'
-    assert second.name == 'REPORT ZONA SUR 2 11-00.csv'
+    assert first.name == 'filepart_zona_sur_page_0001_20261126_110000.csv'
+    assert second.name == 'filepart_zona_sur_page_0002_20261126_110000.csv'
     with first.open(encoding='utf-8-sig', newline='') as stream:
         assert list(csv.DictReader(stream)) == [entry()]
 
@@ -50,8 +50,9 @@ def test_report_is_uploaded_before_advancing_page(tmp_path, monkeypatch):
         return '1'
     monkeypatch.setattr(fileparts, 'process_document', process)
     monkeypatch.setattr(reports, 'upload_report', lambda *args: events.append('uploaded'))
-    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 1
-    assert events == ['processed', 'uploaded']
+    with pytest.raises(RuntimeError, match='stop after advancing'):
+        fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set())
+    assert events == ['processed', 'uploaded', 'next']
     assert not list((tmp_path / 'page-journals').glob('*.jsonl'))
 
 
@@ -237,6 +238,8 @@ def test_entire_first_page_is_reported(tmp_path, monkeypatch):
     processed, uploaded = [], []
     class Page:
         url = 'https://example.test/search'
+        def get_by_role(self, *args, **kwargs): return self
+        def count(self): return 0
     def process(page, name, url, zone, report, snapshot, journal):
         doc_id = url.split('=')[-1]
         item = entry()
@@ -253,7 +256,7 @@ def test_entire_first_page_is_reported(tmp_path, monkeypatch):
     assert len(uploaded[0].splitlines()) == 16
 
 
-def test_stops_before_second_page(tmp_path, monkeypatch):
+def test_uploads_one_report_per_page(tmp_path, monkeypatch):
     import json
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
@@ -263,7 +266,7 @@ def test_stops_before_second_page(tmp_path, monkeypatch):
         index = 0
         def get_by_role(self, *args, **kwargs): return self
         def count(self): return 1
-        def is_disabled(self): return False
+        def is_disabled(self): return self.index >= 1
         def click(self): self.index += 1
         def wait_for_function(self, *args, **kwargs): pass
     page = Page()
@@ -276,6 +279,31 @@ def test_stops_before_second_page(tmp_path, monkeypatch):
     monkeypatch.setattr(fileparts, 'process_document', process)
     uploads = []
     monkeypatch.setattr(reports, 'upload_report', lambda page, path, *args: uploads.append(path.read_text(encoding='utf-8-sig')))
-    assert fileparts.process_zone(page, lambda _: None, lambda _: None, 'Zona Sur', set()) == 6
-    assert page.index == 0 and len(uploads) == 1
+    assert fileparts.process_zone(page, lambda _: None, lambda _: None, 'Zona Sur', set()) == 15
+    assert page.index == 1 and len(uploads) == 2
     assert '5.pdf' in uploads[0] and '6.pdf' not in uploads[0]
+    assert '6.pdf' in uploads[1] and '14.pdf' in uploads[1]
+
+
+def test_report_failure_stops_before_next_page(tmp_path, monkeypatch):
+    import json
+    from clm import fileparts, reports
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(fileparts, 'select_search', lambda *args: None)
+    monkeypatch.setattr(fileparts, 'page_results', lambda page: [('a.pdf', 'https://example.test/?Id=1')])
+    class Page:
+        url = 'https://example.test/search'
+        def get_by_role(self, *args, **kwargs):
+            raise AssertionError('Must not advance after a report failure')
+    def process(page, name, url, zone, report, snapshot, journal):
+        item = entry()
+        item.update(filename=name, document_url=url, document_id='1')
+        journal.write_text(json.dumps(item) + '\n')
+        return '1'
+    def fail_report(*args):
+        raise reports.ReportUnconfirmed('Upload uncertain')
+    monkeypatch.setattr(fileparts, 'process_document', process)
+    monkeypatch.setattr(reports, 'upload_report', fail_report)
+    with pytest.raises(reports.ReportUnconfirmed, match='Upload uncertain'):
+        fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set())
+    assert list((tmp_path / 'page-journals').glob('*.jsonl'))
