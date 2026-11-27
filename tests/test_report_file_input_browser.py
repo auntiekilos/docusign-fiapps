@@ -122,12 +122,9 @@ def test_report_missing_from_folder_stays_submitted(browser, fast_waits, monkeyp
 
 
 def test_report_without_upload_input_is_not_marked_submitted(browser, fast_waits, monkeypatch, tmp_path):
-    original = reports.open_menu_upload_input
-
     def short_wait(page):
-        page.locator(reports.UPLOAD_INPUT + ':visible').wait_for(state='visible', timeout=1500)
-        return original(page)
-    monkeypatch.setattr(reports, 'open_menu_upload_input', short_wait)
+        page.get_by_text('Upload', exact=True).wait_for(state='visible', timeout=1500)
+    monkeypatch.setattr(reports, 'open_upload_chooser', short_wait)
     search = clm_page(browser, input=False)
     report = pending_report(tmp_path)
     with pytest.raises(reports.ReportUnconfirmed, match=r'was not sent: 0 visible of 1 upload inputs'):

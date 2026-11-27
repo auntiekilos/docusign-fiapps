@@ -95,16 +95,11 @@ def click_folder_with_walkthrough_retry(page, folder):
 UPLOAD_INPUT = 'input[type=file].primaryFileUploadInput'
 
 
-def open_menu_upload_input(page):
-    """Return the one file input shown over the File menu's Upload item.
-
-    DocuSign places a transparent input on top of the Upload label. Hovering or
-    clicking the label fails because the input intercepts pointer events, and
-    other hidden upload inputs can exist on the page.
-    """
-    upload = page.locator(UPLOAD_INPUT + ':visible')
-    upload.wait_for(state='visible', timeout=30000)
-    return upload
+def open_upload_chooser(page):
+    """Open the native chooser using the Upload menu item."""
+    with page.expect_file_chooser(timeout=30000) as chooser:
+        page.get_by_text('Upload', exact=True).click(timeout=30000, force=True)
+    return chooser.value
 
 
 def upload_input_summary(page):
@@ -181,9 +176,9 @@ def upload_report(search_page, report_path, report, snapshot):
             report('Report: clicked File; waiting three seconds.')
             page.wait_for_timeout(3000)
             snapshot(page)
-            report(f'Report: looking for upload input; {upload_input_summary(page)}')
-            upload = open_menu_upload_input(page)
-            report(f'Report: upload input found; {upload_input_summary(page)}')
+            report('Report: clicking Upload to open the file chooser.')
+            upload = open_upload_chooser(page)
+            report('Report: file chooser opened.')
         except Exception as exc:
             # Nothing was sent, so the report stays pending and can be sent again.
             snapshot(page)
@@ -191,9 +186,8 @@ def upload_report(search_page, report_path, report, snapshot):
         write_state(state, {'status': 'submitted', 'filename': report_path.name,
                             'retry_after': time.time() + REPORT_RETRY_SECONDS})
         try:
-            # The input covers the Upload label, so it receives the file directly.
-            report('Report: sending the file to the upload input.')
-            upload.set_input_files(str(report_path))
+            report('Report: selecting the report in the file chooser.')
+            upload.set_files(str(report_path))
             report('Report: file sent; waiting for it to appear in the folder.')
             existing.wait_for(timeout=REPORT_CONFIRM_MS)
         except Exception as exc:
