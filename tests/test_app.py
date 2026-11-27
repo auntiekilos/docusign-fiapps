@@ -69,7 +69,7 @@ def test_login_error_stays_visible(monkeypatch):
     at = start(monkeypatch, "login_fail")
     at = at.button[0].click().run()
     assert "Sign-in was rejected." in html(at)
-    assert [b.label for b in at.button] == ["Sign in again"]
+    assert [b.label for b in at.button] == ["Try sign-in again"]
 
 
 def test_run_error_stays_visible_and_signs_out(monkeypatch):
@@ -167,3 +167,23 @@ def test_unconfirmed_report_is_visible_without_counting_as_uploaded(monkeypatch)
     assert 'REPORT ZONA SUR 1 11-00.csv' in page
     assert 'Upload unconfirmed' in page
     assert '0 uploaded' in page
+
+
+def test_original_setup_progress_and_design_are_restored(monkeypatch):
+    class Setup(Fake):
+        def login(self, url, progress=None):
+            for i in range(9):
+                progress(f'Installing dependency {i}')
+            raise ValueError('Setup failed')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
+    monkeypatch.setattr(clm.browser, 'BrowserSession', Setup)
+    st.cache_resource.clear()
+    at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
+    at = at.button[0].click().run()
+    page = html(at)
+    assert '--slots:6' in page
+    assert 'Starting sign-in' in page and 'Installing dependency 8' in page
+    assert 'Setup failed' in page
+    assert 'linear-gradient(180deg, #3b9cff, #007aff)' in page
+    assert 'Browser screenshots' not in page and 'Activity log' not in page
+    assert [button.label for button in at.button] == ['Try sign-in again']
