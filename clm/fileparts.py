@@ -220,6 +220,27 @@ def page_results(page):
     return [(link.inner_text().strip(), link.get_attribute('href')) for link in links.all()]
 
 
+def document_path(document, name, zone):
+    """Read the complete folder path from DocuSign's document breadcrumb."""
+    from playwright.sync_api import TimeoutError as Timeout
+    overflow = document.locator('button[data-qa="DocPreviewBreadcrumbs__FolderOverflowMenuButton"]')
+    try:
+        overflow.wait_for(state='visible', timeout=15000)
+    except Timeout:
+        breadcrumb = document.get_by_role('navigation', name='Breadcrumb')
+        breadcrumb.wait_for(state='visible', timeout=15000)
+        folders = [text.strip() for text in breadcrumb.locator('li').all_text_contents() if text.strip() and text.strip() != name]
+    else:
+        overflow.click()
+        items = document.locator('[role="menuitem"]:visible')
+        items.first.wait_for(state='visible', timeout=15000)
+        folders = [text.strip() for text in items.all_text_contents() if text.strip()]
+        overflow.click()
+    if len(folders) < 3 or [part.casefold() for part in folders[:3]] != ['clients', 'spain', zone.casefold()]:
+        raise ValueError(f'Could not determine the DocuSign path for {name}.')
+    return '/'.join(folders)
+
+
 def process_document(page, name, url, zone, report, snapshot, journal=None):
     from playwright.sync_api import TimeoutError as Timeout
     document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
@@ -234,19 +255,7 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
     try:
         document.goto(url, wait_until='domcontentloaded')
         snapshot(document)
-        breadcrumb = document.get_by_role('navigation', name='Breadcrumb')
-        overflow = breadcrumb.get_by_role('button', name='Ancestor subfolders overflow menu')
-        folders = []
-        if overflow.is_visible():
-            overflow.click()
-            folders = document.get_by_role('menu', name='Ancestor subfolders overflow menu').get_by_role('menuitem').all_text_contents()
-            overflow.click()
-        else:
-            folders = [text.strip() for text in breadcrumb.locator('li').all_text_contents() if text.strip()]
-            folders = [part for part in folders if part != name]
-        if not folders:
-            raise ValueError(f'Could not determine the DocuSign path for {name}.')
-        docusign_path = '/'.join(part.strip() for part in folders if part.strip())
+        docusign_path = document_path(document, name, zone)
         actions = document.locator('[aria-label="Actions"]')
         folder, path = download_for_upload(document, actions, name, zone, document_id, url, report)
         report(f'Uploading: {name}')
@@ -357,6 +366,10 @@ def process_zone(page, report, snapshot, zone, known, event=None):
                     known_seen = True
                     continue
                 previous = read_attempt(zone, document_id)
+                # Earlier path failures happened before any upload; let this fix retry them.
+                if previous and previous.get('status') != 'upload unconfirmed' and previous.get('reason') == f'Could not determine the DocuSign path for {name}.':
+                    attempt_path(zone, document_id).unlink(missing_ok=True)
+                    previous = None
                 if previous and (previous.get('status') == 'upload unconfirmed' or previous['attempts'] >= MAX_ATTEMPTS):
                     exhausted_seen = True
                     continue

@@ -185,3 +185,24 @@ def test_search_filter_buttons_are_scoped_to_all_filters_dialog():
     messages = []
     fileparts.select_search(Locator(), messages.append, 'Zona Sur')
     assert messages == ['Searching for filepart documents in Zona Sur.']
+
+
+def test_exhausted_path_only_failures_are_retried(tmp_path, monkeypatch):
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(fileparts, 'select_search', lambda *args: None)
+    monkeypatch.setattr(fileparts, 'page_results', lambda page: [('a.pdf', 'https://example.test/?Id=1')])
+    for _ in range(4):
+        fileparts.record_failure('Zona Sur', '1', 'a.pdf', 'https://example.test/?Id=1', 'Could not determine the DocuSign path for a.pdf.')
+    calls = []
+    def process(*args):
+        calls.append(True)
+        raise ValueError('different failure')
+    monkeypatch.setattr(fileparts, 'process_document', process)
+    class Next:
+        def count(self): return 0
+    class Page:
+        url = 'https://example.test/search'
+        def get_by_role(self, *args, **kwargs): return Next()
+    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 0
+    assert calls == [True]
+    assert fileparts.read_attempt('Zona Sur', '1')['attempts'] == 1
