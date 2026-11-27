@@ -150,3 +150,20 @@ def test_diagnostics_are_not_displayed(monkeypatch):
     assert 'internal diagnostic detail' not in page
     assert not at.code
     assert 'Stopped: Report stopped' in page
+
+
+def test_unconfirmed_report_is_visible_without_counting_as_uploaded(monkeypatch):
+    class Unconfirmed(Fake):
+        def process_filepart(self, progress=None, screenshot=None, event=None):
+            event({'type': 'ledger_unconfirmed', 'name': 'REPORT ZONA SUR 1 11-00.csv',
+                   'uploaded_at': '2026-07-01T10:01:00+00:00'})
+            return 0
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
+    monkeypatch.setattr(clm.browser, 'BrowserSession', Unconfirmed)
+    st.cache_resource.clear()
+    at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
+    at = at.button[0].click().run().button[0].click().run()
+    page = html(at)
+    assert 'REPORT ZONA SUR 1 11-00.csv' in page
+    assert 'Upload unconfirmed' in page
+    assert '0 uploaded' in page

@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from clm.fileparts import data_dir
 
 FIELDS = ('zone', 'filename', 'docusign_path', 'document_url', 'document_id', 'processed_at')
+PAGE_FIELDS = (*FIELDS, 'status', 'note')
 
 
 def write_state(path, state):
@@ -33,7 +34,10 @@ def write_state(path, state):
 def create_page_report(zone, entries):
     if not entries:
         raise ValueError('A report must contain at least one processed file.')
-    if any(any(not entry.get(field) for field in FIELDS) for entry in entries):
+    required = ('zone', 'filename', 'document_url', 'document_id', 'processed_at')
+    if any(any(not entry.get(field) for field in required) or
+           (not entry.get('docusign_path') and entry.get('status') != 'upload unconfirmed')
+           for entry in entries):
         raise ValueError('Each report entry must include its complete DocuSign path and processing details.')
     if any(entry['zone'] != zone for entry in entries):
         raise ValueError('A report can only contain entries from its own zone.')
@@ -54,13 +58,13 @@ def create_page_report(zone, entries):
     last_time = datetime.fromisoformat(entries[-1]['processed_at'].replace('Z', '+00:00'))
     if last_time.tzinfo is None:
         raise ValueError('Report timestamps must include a timezone.')
-    filename = f"filepart_{safe_zone.replace(' ', '_').lower()}_page_{number:04d}_{last_time.astimezone(ZoneInfo('Europe/Madrid')):%Y%m%d_%H%M%S}.csv"
+    filename = f"REPORT {safe_zone.upper()} {number} {last_time.astimezone(ZoneInfo('Europe/Madrid')):%H-%M}.csv"
     target = folder / filename
     try:
         with target.open('x', encoding='utf-8-sig', newline='') as stream:
-            writer = csv.DictWriter(stream, fieldnames=FIELDS, extrasaction='ignore')
+            writer = csv.DictWriter(stream, fieldnames=PAGE_FIELDS, extrasaction='ignore')
             writer.writeheader()
-            writer.writerows(entries)
+            writer.writerows({**entry, 'status': entry.get('status', 'processed'), 'note': entry.get('note', '')} for entry in entries)
             stream.flush()
             os.fsync(stream.fileno())
         write_state(folder / 'state.json', {'status': 'pending', 'filename': filename})

@@ -80,10 +80,15 @@ def table(docs, count, bad=False):
 
 def ledgers(items):
     """Separate list of uploaded page ledgers. items: (name, upload time)."""
-    out = "".join(f'<li><span>{escape(n)} <span class="ok">&#10003;</span></span><small>uploaded {escape(t)}</small></li>'
-                  for n, t in reversed(items))
+    out = "".join(
+        f'<li><span>{escape(item[0])} '
+        + ('<span class="bad">Upload unconfirmed</span>' if len(item) > 2 and item[2] else '<span class="ok">&#10003;</span>')
+        + f'</span><small>{escape(item[1])}</small></li>'
+        for item in reversed(items)
+    )
     out = out or '<li class="empty">No reports uploaded yet</li>'
-    return (f'<div class="dock"><div class="dock-in"><div class="hdr">Reports<span>{len(items)} uploaded</span></div>'
+    confirmed = sum(1 for item in items if len(item) < 3 or not item[2])
+    return (f'<div class="dock"><div class="dock-in"><div class="hdr">Reports<span>{confirmed} uploaded</span></div>'
             f'<ul class="ledgers">{out}</ul></div></div>')
 
 
@@ -170,13 +175,15 @@ def run_zone():
             else:
                 state["failed"] = True
                 attempts = item.get("attempts")
-                reason = str(item.get("reason") or "Unknown error")
+                reason = redact(str(item.get("reason") or "Unknown error"))
                 row.update(finish=None, path=None, error=f"{reason} (attempt {attempts} of {item.get('max_attempts', MAX_ATTEMPTS)})" if attempts else reason)
-        elif kind == "ledger_uploaded":
-            reports.append((str(item.get("name", "—")), clock(item.get("uploaded_at"))))
+        elif kind in ("ledger_uploaded", "ledger_unconfirmed"):
+            reports.append((str(item.get("name", "—")), clock(item.get("uploaded_at")), kind == "ledger_unconfirmed"))
             if "issue_count" in item:
                 state["issue_count"] = item["issue_count"]
             ledger_view.markdown(ledgers(reports), unsafe_allow_html=True)
+        elif kind == "cycle_error":
+            state["status"] = "Retrying after an error"
         paint()
 
     def progress(message):

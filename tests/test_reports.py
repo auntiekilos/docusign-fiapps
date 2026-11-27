@@ -12,10 +12,10 @@ def test_reports_have_csv_quoting_and_persistent_zone_sequence(tmp_path, monkeyp
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
     first = create_page_report('Zona Sur', [entry()])
     second = create_page_report('Zona Sur', [entry()])
-    assert first.name == 'filepart_zona_sur_page_0001_20261126_110000.csv'
-    assert second.name == 'filepart_zona_sur_page_0002_20261126_110000.csv'
+    assert first.name == 'REPORT ZONA SUR 1 11-00.csv'
+    assert second.name == 'REPORT ZONA SUR 2 11-00.csv'
     with first.open(encoding='utf-8-sig', newline='') as stream:
-        assert list(csv.DictReader(stream)) == [entry()]
+        assert list(csv.DictReader(stream)) == [{**entry(), 'status': 'processed', 'note': ''}]
 
 
 def test_report_requires_full_path(tmp_path, monkeypatch):
@@ -145,7 +145,7 @@ def test_interrupted_page_report_reuses_same_prepared_file(tmp_path, monkeypatch
             raise ValueError('interrupted')
     monkeypatch.setattr(reports, 'upload_report', interrupted)
     with pytest.raises(ValueError, match='interrupted'):
-        fileparts.finish_page_report(None, journal, 'Zona Sur', set(), lambda _: None, lambda _: None)
+        fileparts._finish_page_report(None, journal, 'Zona Sur', set(), lambda _: None, lambda _: None)
     known = set()
     fileparts.finish_page_report(None, journal, 'Zona Sur', known, lambda _: None, lambda _: None)
     assert uploads[0] == uploads[1]
@@ -285,25 +285,38 @@ def test_uploads_one_report_per_page(tmp_path, monkeypatch):
     assert '6.pdf' in uploads[1] and '14.pdf' in uploads[1]
 
 
-def test_report_failure_stops_before_next_page(tmp_path, monkeypatch):
+def test_report_failure_is_recorded_and_processing_continues(tmp_path, monkeypatch):
     import json
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
     monkeypatch.setattr(fileparts, 'select_search', lambda *args: None)
-    monkeypatch.setattr(fileparts, 'page_results', lambda page: [('a.pdf', 'https://example.test/?Id=1')])
+    monkeypatch.setattr(fileparts, 'page_results', lambda page: [(f'{page.index}.pdf', f'https://example.test/?Id={page.index}')])
     class Page:
         url = 'https://example.test/search'
-        def get_by_role(self, *args, **kwargs):
-            raise AssertionError('Must not advance after a report failure')
+        index = 0
+        def get_by_role(self, *args, **kwargs): return self
+        def count(self): return 1
+        def is_disabled(self): return self.index >= 1
+        def click(self): self.index += 1
+        def wait_for_function(self, *args, **kwargs): pass
     def process(page, name, url, zone, report, snapshot, journal):
         item = entry()
-        item.update(filename=name, document_url=url, document_id='1')
+        doc_id = str(page.index)
+        item.update(filename=name, document_url=url, document_id=doc_id)
         journal.write_text(json.dumps(item) + '\n')
-        return '1'
-    def fail_report(*args):
-        raise reports.ReportUnconfirmed('Upload uncertain')
+        fileparts.record_processed(doc_id, name, zone, url, item['docusign_path'], item['processed_at'])
+        return doc_id
+    uploads = []
+    def upload(page, path, *args):
+        uploads.append(path)
+        if len(uploads) == 1:
+            raise reports.ReportUnconfirmed('Upload uncertain')
     monkeypatch.setattr(fileparts, 'process_document', process)
-    monkeypatch.setattr(reports, 'upload_report', fail_report)
-    with pytest.raises(reports.ReportUnconfirmed, match='Upload uncertain'):
-        fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set())
-    assert list((tmp_path / 'page-journals').glob('*.jsonl'))
+    monkeypatch.setattr(reports, 'upload_report', upload)
+    events = []
+    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set(), events.append) == 2
+    assert [event['type'] for event in events].count('ledger_unconfirmed') == 1
+    assert [event['type'] for event in events].count('ledger_uploaded') == 1
+    assert len(uploads) == 2 and uploads[0] != uploads[1]
+    assert list((tmp_path / 'unconfirmed-reports').glob('*/outcome.json'))
+    assert not list((tmp_path / 'page-journals').glob('*.jsonl'))

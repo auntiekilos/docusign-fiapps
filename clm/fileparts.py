@@ -24,6 +24,9 @@ class DownloadFailed(ValueError):
 
 class UploadUnconfirmed(ValueError):
     """The upload was submitted but its outcome was not confirmed."""
+    def __init__(self, message, docusign_path=None):
+        super().__init__(message)
+        self.docusign_path = docusign_path
 
 
 def data_dir():
@@ -310,7 +313,7 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
         # Keep the record durable before submitting; a crash must not silently retry.
         with pending.open('w', encoding='utf-8') as stream:
             json.dump({'document_id': document_id, 'name': name, 'url': url,
-                       'upload_attempt': 1}, stream)
+                       'upload_attempt': 1, 'docusign_path': docusign_path}, stream)
             stream.flush()
             os.fsync(stream.fileno())
         confirmation_key = watch_upload_confirmation(document)
@@ -320,7 +323,7 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
             remaining = max(1, int((deadline - time.monotonic()) * 1000))
             wait_for_upload_confirmation(document, remaining, confirmation_key)
         except Timeout as exc:
-            raise UploadUnconfirmed(f'Upload of {name} was not confirmed within 45 seconds.') from exc
+            raise UploadUnconfirmed(f'Upload of {name} was not confirmed within 45 seconds.', docusign_path) from exc
         mark_for_deletion(folder)
         confirmed = True
         processed_at = datetime.now(timezone.utc).isoformat()
@@ -343,6 +346,33 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
 
 
 def finish_page_report(page, journal, zone, known, report, snapshot, event=None):
+    """Archive an unconfirmed report and continue without submitting it again."""
+    try:
+        _finish_page_report(page, journal, zone, known, report, snapshot, event)
+    except Exception as exc:
+        if not journal.exists():
+            raise
+        manifest = journal.with_suffix('.report.json')
+        name = 'Page report'
+        if manifest.exists():
+            try:
+                name = Path(json.loads(manifest.read_text(encoding='utf-8'))['path']).name
+            except (OSError, ValueError, KeyError):
+                pass
+        root = data_dir() / 'unconfirmed-reports'
+        root.mkdir(parents=True, exist_ok=True)
+        archive = Path(tempfile.mkdtemp(prefix='report-', dir=root))
+        os.replace(journal, archive / journal.name)
+        if manifest.exists():
+            os.replace(manifest, archive / manifest.name)
+        (archive / 'outcome.json').write_text(json.dumps({'zone': zone, 'name': name, 'reason': str(exc)}, ensure_ascii=False), encoding='utf-8')
+        report(f'Report upload unconfirmed: {name}. Continuing to the next page.')
+        if event:
+            event({'type': 'ledger_unconfirmed', 'name': name,
+                   'reason': str(exc), 'uploaded_at': datetime.now(timezone.utc).isoformat()})
+
+
+def _finish_page_report(page, journal, zone, known, report, snapshot, event=None):
     from clm.reports import create_page_report, upload_report, write_state
     manifest = journal.with_suffix('.report.json')
     if not journal.exists():
@@ -362,6 +392,8 @@ def finish_page_report(page, journal, zone, known, report, snapshot, event=None)
     # A crash may occur between recording the page and appending global history.
     recorded = processed_ids()
     for entry in entries:
+        if entry.get('status') == 'upload unconfirmed':
+            continue
         if entry['document_id'] not in recorded:
             record_processed(entry['document_id'], entry['filename'], entry['zone'],
                              entry['document_url'], entry['docusign_path'], entry['processed_at'])
@@ -382,8 +414,7 @@ def process_zone(page, report, snapshot, zone, known, event=None):
     journal = journal_dir / (hashlib.sha256(zone.encode()).hexdigest() + '.jsonl')
     if journal.exists():
         finish_page_report(page, journal, zone, known, report, snapshot, event)
-        report('Recovered the interrupted test report. Run stopped.')
-        return 0
+        report('Recovered or recorded the interrupted report; continuing the scan.')
     while True:
         try:
             selected = page_results(page)
@@ -418,24 +449,34 @@ def process_zone(page, report, snapshot, zone, known, event=None):
                            'url': url, 'started_at': started_at, 'attempts': failed['attempts'],
                            'max_attempts': MAX_ATTEMPTS, 'reason': str(exc)})
                 continue
-            except UploadUnconfirmed as exc:
-                failed = record_failure(zone, document_id, name, url, exc, unconfirmed=True)
-                # The failure record is durable before removing the pending marker.
-                (data_dir() / 'pending' / (document_id + '.json')).unlink()
-                report(f'Upload of {name} unconfirmed; check DocuSign before retrying.')
+            except Exception as exc:
+                pending = data_dir() / 'pending' / (document_id + '.json')
+                unconfirmed = isinstance(exc, UploadUnconfirmed) or pending.exists()
+                failure = record_failure(zone, document_id, name, url, exc, unconfirmed=unconfirmed)
+                if unconfirmed:
+                    docusign_path = getattr(exc, 'docusign_path', None)
+                    if not docusign_path and pending.exists():
+                        try:
+                            docusign_path = json.loads(pending.read_text(encoding='utf-8')).get('docusign_path')
+                        except (OSError, ValueError):
+                            pass
+                    entry = {'zone': zone, 'filename': name, 'docusign_path': docusign_path or '',
+                             'document_url': url, 'document_id': document_id,
+                             'processed_at': datetime.now(timezone.utc).isoformat(),
+                             'status': 'upload unconfirmed', 'note': str(exc)}
+                    with journal.open('a', encoding='utf-8') as stream:
+                        stream.write(json.dumps(entry, ensure_ascii=False) + '\n')
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    pending.unlink(missing_ok=True)
+                    reason = f'Upload not confirmed: {exc}'
+                else:
+                    reason = str(exc)
+                report(f'Could not confirm {name}: {reason}' if unconfirmed else f'Could not process {name}: {reason}')
                 if event:
                     event({'type': 'document_failed', 'document_id': document_id, 'name': name,
-                           'url': url, 'started_at': started_at, 'attempts': 1,
-                           'max_attempts': 1, 'reason': str(exc)})
-                continue
-            except ValueError as exc:
-                # Once an upload is submitted, its outcome must be reconciled by a person.
-                if (data_dir() / 'pending' / (document_id + '.json')).exists():
-                    raise
-                failed = record_failure(zone, document_id, name, url, exc)
-                report(f"Could not process {name} (attempt {failed['attempts']} of {MAX_ATTEMPTS}).")
-                if event:
-                    event({'type': 'document_failed', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at, 'attempts': failed['attempts'], 'reason': str(exc)})
+                           'url': url, 'started_at': started_at, 'attempts': failure['attempts'],
+                           'max_attempts': 1 if unconfirmed else MAX_ATTEMPTS, 'reason': reason})
                 continue
             known.add(processed)
             if event:
