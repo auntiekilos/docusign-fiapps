@@ -100,3 +100,22 @@ def test_setup_list_has_six_fixed_slots_and_keeps_all_rows(monkeypatch):
     page = html(at)
     assert "--slots:6" in page
     assert "Starting sign-in" in page and "Step 8" in page  # oldest row is not dropped
+
+
+def test_main_entrypoint_survives_button_reruns(monkeypatch):
+    import config
+    for name in ('CLM_URL', 'CLM_USERNAME', 'CLM_PASSWORD', 'CLM_Zone', 'CLM_DATA_DIR', 'CLM_HISTORY_PATH'):
+        monkeypatch.setenv(name, '')
+    monkeypatch.setattr(config, 'CLM_Zone', 'Zona Sur')
+    monkeypatch.setattr(clm.browser, 'BrowserSession', Fake)
+    Fake.mode = 'ok'
+    st.cache_resource.clear()
+    at = AppTest.from_file(str(Path(__file__).parent.parent / 'main.py'), default_timeout=20).run()
+    assert [b.label for b in at.button] == ['Run setup']
+    at = at.button[0].click().run()
+    assert not at.exception
+    assert [b.label for b in at.button] == ['Process Zona Sur']
+    at = at.button[0].click().run()
+    assert not at.exception
+    assert [b.label for b in at.button] == ['Sign in again']
+    assert '1 processed.' in html(at)
