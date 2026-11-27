@@ -12,8 +12,8 @@ def test_reports_have_csv_quoting_and_persistent_zone_sequence(tmp_path, monkeyp
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
     first = create_page_report('Zona Sur', [entry()])
     second = create_page_report('Zona Sur', [entry()])
-    assert first.name == 'REPORT ZONA SUR 1 11:00.csv'
-    assert second.name == 'REPORT ZONA SUR 2 11:00.csv'
+    assert first.name == 'REPORT ZONA SUR 1 11-00.csv'
+    assert second.name == 'REPORT ZONA SUR 2 11-00.csv'
     with first.open(encoding='utf-8-sig', newline='') as stream:
         assert list(csv.DictReader(stream)) == [entry()]
 
