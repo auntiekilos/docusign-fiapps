@@ -241,6 +241,40 @@ def document_path(document, name, zone):
     return '/'.join(folders)
 
 
+
+def watch_upload_confirmation(document):
+    """Observe transient success notices before submitting the new version."""
+    document.evaluate("""() => {
+        const messages = new Set(['Document uploaded', 'Success! Your document has been checked in.']);
+        window.__clmUploadConfirmed = false;
+        if (window.__clmUploadObserver) window.__clmUploadObserver.disconnect();
+        const inspect = node => {
+            if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+            if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
+            const elements = [node, ...node.querySelectorAll('*')];
+            for (const element of elements) {
+                if (element.getClientRects().length && messages.has(element.textContent.trim())) {
+                    window.__clmUploadConfirmed = true;
+                    return;
+                }
+            }
+        };
+        window.__clmUploadObserver = new MutationObserver(records => {
+            for (const record of records) {
+                for (const node of record.addedNodes) inspect(node);
+                if (record.type === 'characterData') inspect(record.target);
+                if (record.type === 'attributes') inspect(record.target);
+            }
+        });
+        window.__clmUploadObserver.observe(document.body, {subtree: true, childList: true, characterData: true, attributes: true});
+    }""")
+
+
+def wait_for_upload_confirmation(document, timeout):
+    document.wait_for_function('() => window.__clmUploadConfirmed === true', timeout=timeout)
+    document.evaluate('() => { if (window.__clmUploadObserver) window.__clmUploadObserver.disconnect(); }')
+
+
 def process_document(page, name, url, zone, report, snapshot, journal=None):
     from playwright.sync_api import TimeoutError as Timeout
     document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
@@ -271,11 +305,12 @@ def process_document(page, name, url, zone, report, snapshot, journal=None):
                        'upload_attempt': 1}, stream)
             stream.flush()
             os.fsync(stream.fileno())
+        watch_upload_confirmation(document)
         deadline = time.monotonic() + UPLOAD_CONFIRM_SECONDS
         try:
             dialog.get_by_role('button', name='Submit').click(timeout=UPLOAD_CONFIRM_SECONDS * 1000)
             remaining = max(1, int((deadline - time.monotonic()) * 1000))
-            document.get_by_text('Success! Your document has been checked in.', exact=True).wait_for(timeout=remaining)
+            wait_for_upload_confirmation(document, remaining)
         except Timeout as exc:
             raise UploadUnconfirmed(f'Upload of {name} was not confirmed within 45 seconds.') from exc
         mark_for_deletion(folder)
