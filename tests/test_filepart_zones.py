@@ -166,3 +166,22 @@ def test_confirmed_and_exhausted_results_complete_together(tmp_path, monkeypatch
         url = 'https://example.test/search'
         def get_by_role(self, *args, **kwargs): return Next()
     assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', {'1'}) == 0
+
+
+def test_search_filter_buttons_are_scoped_to_all_filters_dialog():
+    class Locator:
+        def __init__(self, scope='page'):
+            self.scope = scope
+        def locator(self, selector): return Locator(self.scope)
+        def is_visible(self): return False
+        def click(self, **kwargs): pass
+        def fill(self, value): pass
+        def get_by_placeholder(self, name): return Locator(self.scope)
+        def get_by_text(self, name, **kwargs): return Locator(self.scope)
+        def get_by_role(self, role, name=None, **kwargs):
+            if role == 'button' and name in ('Location', 'File Type'):
+                assert self.scope == 'All Filters'
+            return Locator(name if role == 'dialog' else self.scope)
+    messages = []
+    fileparts.select_search(Locator(), messages.append, 'Zona Sur')
+    assert messages == ['Searching for filepart documents in Zona Sur.']
