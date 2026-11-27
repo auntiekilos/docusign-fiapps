@@ -29,7 +29,6 @@ def test_report_requires_full_path(tmp_path, monkeypatch):
 def test_report_is_uploaded_before_advancing_page(tmp_path, monkeypatch):
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
-    monkeypatch.setattr(fileparts, 'TEST_DOCUMENT_LIMIT', 10)
     events = []
     class Next:
         def count(self): return 1
@@ -51,10 +50,9 @@ def test_report_is_uploaded_before_advancing_page(tmp_path, monkeypatch):
         return '1'
     monkeypatch.setattr(fileparts, 'process_document', process)
     monkeypatch.setattr(reports, 'upload_report', lambda *args: events.append('uploaded'))
-    with pytest.raises(RuntimeError, match='stop after advancing'):
-        fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set())
-    assert events == ['processed', 'next']
-    assert list((tmp_path / 'page-journals').glob('*.jsonl'))
+    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 1
+    assert events == ['processed', 'uploaded']
+    assert not list((tmp_path / 'page-journals').glob('*.jsonl'))
 
 
 def test_total_report_includes_all_zone_history(tmp_path, monkeypatch):
@@ -230,11 +228,10 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
     assert visited.index('Zona Sur') < visited.index('wait 7000') < visited.index('wait 1000') < visited.index('File') < visited.index('wait 3000') < visited.index('Upload')
 
 
-def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
+def test_entire_first_page_is_reported(tmp_path, monkeypatch):
     import json
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
-    monkeypatch.setattr(fileparts, 'TEST_DOCUMENT_LIMIT', 10)
     monkeypatch.setattr(fileparts, 'select_search', lambda *a: None)
     monkeypatch.setattr(fileparts, 'page_results', lambda page: [(f'{i}.pdf', f'https://example.test/?Id={i}') for i in range(15)])
     processed, uploaded = [], []
@@ -250,16 +247,16 @@ def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
         return doc_id
     monkeypatch.setattr(fileparts, 'process_document', process)
     monkeypatch.setattr(reports, 'upload_report', lambda page, path, *args: uploaded.append(path.read_text(encoding='utf-8-sig')))
-    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 10
-    assert processed == [str(i) for i in range(10)]
-    assert len(uploaded) == 1 and '9.pdf' in uploaded[0] and '10.pdf' not in uploaded[0]
+    assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 15
+    assert processed == [str(i) for i in range(15)]
+    assert len(uploaded) == 1 and '14.pdf' in uploaded[0]
+    assert len(uploaded[0].splitlines()) == 16
 
 
-def test_ten_lines_across_pages_produce_one_report(tmp_path, monkeypatch):
+def test_stops_before_second_page(tmp_path, monkeypatch):
     import json
     from clm import fileparts, reports
     monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
-    monkeypatch.setattr(fileparts, 'TEST_DOCUMENT_LIMIT', 10)
     monkeypatch.setattr(fileparts, 'select_search', lambda *a: None)
     class Page:
         url = 'https://example.test/search'
@@ -279,11 +276,6 @@ def test_ten_lines_across_pages_produce_one_report(tmp_path, monkeypatch):
     monkeypatch.setattr(fileparts, 'process_document', process)
     uploads = []
     monkeypatch.setattr(reports, 'upload_report', lambda page, path, *args: uploads.append(path.read_text(encoding='utf-8-sig')))
-    assert fileparts.process_zone(page, lambda _: None, lambda _: None, 'Zona Sur', set()) == 10
-    assert page.index == 1 and len(uploads) == 1
-    assert '9.pdf' in uploads[0] and '10.pdf' not in uploads[0]
-
-
-def test_configured_test_limit_is_one():
-    from clm.fileparts import TEST_DOCUMENT_LIMIT
-    assert TEST_DOCUMENT_LIMIT == 1
+    assert fileparts.process_zone(page, lambda _: None, lambda _: None, 'Zona Sur', set()) == 6
+    assert page.index == 0 and len(uploads) == 1
+    assert '5.pdf' in uploads[0] and '6.pdf' not in uploads[0]

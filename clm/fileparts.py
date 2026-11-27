@@ -15,7 +15,6 @@ RETENTION_SECONDS = 4 * 60 * 60
 UNCONFIRMED_RETENTION_SECONDS = 2 * 60
 MAX_ATTEMPTS = 4  # More than three attempts means four total attempts.
 UPLOAD_CONFIRM_SECONDS = 45
-TEST_DOCUMENT_LIMIT = 1
 DOWNLOAD_RETRY_SECONDS = 10 * 60
 
 
@@ -375,114 +374,80 @@ def finish_page_report(page, journal, zone, known, report, snapshot, event=None)
 
 
 def process_zone(page, report, snapshot, zone, known, event=None):
-    """Process each search page and repeat the search until no fileparts remain."""
+    """Process the current search page, upload its report, and stop."""
     select_search(page, report, zone)
-    search_url = page.url
     total = 0
-    lines_seen = 0
     journal_dir = data_dir() / 'page-journals'
     journal_dir.mkdir(parents=True, exist_ok=True)
-    import hashlib
     journal = journal_dir / (hashlib.sha256(zone.encode()).hexdigest() + '.jsonl')
     if journal.exists():
         finish_page_report(page, journal, zone, known, report, snapshot, event)
         report('Recovered the interrupted test report. Run stopped.')
         return 0
-    while True:
-        batch_new = 0
-        retry_needed = False
-        exhausted_seen = False
-        known_seen = False
-        while True:
-            try:
-                results = page_results(page)
-            except Exception:
-                if page.get_by_text('0 results', exact=True).is_visible():
-                    return total
-                raise
-            selected = results[:TEST_DOCUMENT_LIMIT - lines_seen]
-            lines_seen += len(selected)
-            for name, url in selected:
-                document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
-                if not document_id:
-                    raise ValueError('A search result has no document ID.')
-                if document_id in known:
-                    known_seen = True
-                    continue
-                previous = read_attempt(zone, document_id)
-                # Earlier path failures happened before any upload; let this fix retry them.
-                if previous and previous.get('status') != 'upload unconfirmed' and previous.get('reason') == f'Could not determine the DocuSign path for {name}.':
-                    attempt_path(zone, document_id).unlink(missing_ok=True)
-                    previous = None
-                if previous and (previous.get('status') == 'upload unconfirmed' or previous['attempts'] >= MAX_ATTEMPTS):
-                    exhausted_seen = True
-                    continue
-                report(f'Processing {name}')
-                started_at = datetime.now(timezone.utc).isoformat()
-                if event:
-                    event({'type': 'document_started', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at})
-                try:
-                    processed = process_document(page, name, url, zone, report, snapshot, journal)
-                except DownloadFailed as exc:
-                    failed = read_attempt(zone, document_id)
-                    exhausted_seen = True
-                    report(f"Could not download {name} after {failed['attempts']} attempts.")
-                    if event:
-                        event({'type': 'document_failed', 'document_id': document_id, 'name': name,
-                               'url': url, 'started_at': started_at, 'attempts': failed['attempts'],
-                               'max_attempts': MAX_ATTEMPTS, 'reason': str(exc)})
-                    continue
-                except UploadUnconfirmed as exc:
-                    failed = record_failure(zone, document_id, name, url, exc, unconfirmed=True)
-                    # The failure record is durable before removing the pending marker.
-                    (data_dir() / 'pending' / (document_id + '.json')).unlink()
-                    exhausted_seen = True
-                    report(f'Upload of {name} unconfirmed; check DocuSign before retrying.')
-                    if event:
-                        event({'type': 'document_failed', 'document_id': document_id, 'name': name,
-                               'url': url, 'started_at': started_at, 'attempts': 1,
-                               'max_attempts': 1, 'reason': str(exc)})
-                    continue
-                except ValueError as exc:
-                    # Once an upload is submitted, its outcome must be reconciled by a person.
-                    if (data_dir() / 'pending' / (document_id + '.json')).exists():
-                        raise
-                    failed = record_failure(zone, document_id, name, url, exc)
-                    exhausted_seen |= failed['attempts'] >= MAX_ATTEMPTS
-                    retry_needed |= failed['attempts'] < MAX_ATTEMPTS
-                    report(f"Could not process {name} (attempt {failed['attempts']} of {MAX_ATTEMPTS}).")
-                    if event:
-                        event({'type': 'document_failed', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at, 'attempts': failed['attempts'], 'reason': str(exc)})
-                    continue
-                known.add(processed)
-                if event:
-                    records = [json.loads(line) for line in history_path().read_text(encoding='utf-8').splitlines() if line.strip()]
-                    item = next((r for r in reversed(records) if r.get('document_id') == document_id and r.get('zone') == zone), None)
-                    if item is None:
-                        raise ValueError('Processed document is missing from history. Reconcile before continuing.')
-                    event({'type': 'document_finished', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at, 'processed_at': item['processed_at'], 'docusign_path': item['docusign_path']})
-                attempt_path(zone, document_id).unlink(missing_ok=True)
-                batch_new += 1
-                total += 1
-            if lines_seen >= TEST_DOCUMENT_LIMIT:
-                finish_page_report(page, journal, zone, known, report, snapshot, event)
-            if lines_seen >= TEST_DOCUMENT_LIMIT:
-                report(f'Test limit of {TEST_DOCUMENT_LIMIT} documents reached.')
-                return total
-            next_page = page.get_by_role('button', name='Go to next page')
-            if not next_page.count() or next_page.is_disabled():
-                finish_page_report(page, journal, zone, known, report, snapshot, event)
-                break
-            previous = results[0][1]
-            next_page.click()
-            page.wait_for_function("old => { const a = document.querySelector('tbody tr a[href*=\"/Documents/View?\"]'); return a && a.href !== old; }", arg=previous, timeout=30000)
-        if total:
+    try:
+        selected = page_results(page)
+    except Exception:
+        if page.get_by_text('0 results', exact=True).is_visible():
             return total
-        if retry_needed:
-            return 0
-        if known_seen or exhausted_seen:
-            return 0
-        raise ValueError('No results could be verified.')
+        raise
+    for name, url in selected:
+        document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
+        if not document_id:
+            raise ValueError('A search result has no document ID.')
+        if document_id in known:
+            continue
+        previous = read_attempt(zone, document_id)
+        # Earlier path failures happened before any upload; let this fix retry them.
+        if previous and previous.get('status') != 'upload unconfirmed' and previous.get('reason') == f'Could not determine the DocuSign path for {name}.':
+            attempt_path(zone, document_id).unlink(missing_ok=True)
+            previous = None
+        if previous and (previous.get('status') == 'upload unconfirmed' or previous['attempts'] >= MAX_ATTEMPTS):
+            continue
+        report(f'Processing {name}')
+        started_at = datetime.now(timezone.utc).isoformat()
+        if event:
+            event({'type': 'document_started', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at})
+        try:
+            processed = process_document(page, name, url, zone, report, snapshot, journal)
+        except DownloadFailed as exc:
+            failed = read_attempt(zone, document_id)
+            report(f"Could not download {name} after {failed['attempts']} attempts.")
+            if event:
+                event({'type': 'document_failed', 'document_id': document_id, 'name': name,
+                       'url': url, 'started_at': started_at, 'attempts': failed['attempts'],
+                       'max_attempts': MAX_ATTEMPTS, 'reason': str(exc)})
+            continue
+        except UploadUnconfirmed as exc:
+            failed = record_failure(zone, document_id, name, url, exc, unconfirmed=True)
+            # The failure record is durable before removing the pending marker.
+            (data_dir() / 'pending' / (document_id + '.json')).unlink()
+            report(f'Upload of {name} unconfirmed; check DocuSign before retrying.')
+            if event:
+                event({'type': 'document_failed', 'document_id': document_id, 'name': name,
+                       'url': url, 'started_at': started_at, 'attempts': 1,
+                       'max_attempts': 1, 'reason': str(exc)})
+            continue
+        except ValueError as exc:
+            # Once an upload is submitted, its outcome must be reconciled by a person.
+            if (data_dir() / 'pending' / (document_id + '.json')).exists():
+                raise
+            failed = record_failure(zone, document_id, name, url, exc)
+            report(f"Could not process {name} (attempt {failed['attempts']} of {MAX_ATTEMPTS}).")
+            if event:
+                event({'type': 'document_failed', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at, 'attempts': failed['attempts'], 'reason': str(exc)})
+            continue
+        known.add(processed)
+        if event:
+            records = [json.loads(line) for line in history_path().read_text(encoding='utf-8').splitlines() if line.strip()]
+            item = next((r for r in reversed(records) if r.get('document_id') == document_id and r.get('zone') == zone), None)
+            if item is None:
+                raise ValueError('Processed document is missing from history. Reconcile before continuing.')
+            event({'type': 'document_finished', 'document_id': document_id, 'name': name, 'url': url, 'started_at': started_at, 'processed_at': item['processed_at'], 'docusign_path': item['docusign_path']})
+        attempt_path(zone, document_id).unlink(missing_ok=True)
+        total += 1
+    finish_page_report(page, journal, zone, known, report, snapshot, event)
+    report('First search page finished. Run stopped.')
+    return total
 
 
 def process_one(page, report, snapshot, event=None):
