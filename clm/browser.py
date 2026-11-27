@@ -343,8 +343,12 @@ class BrowserSession:
                     future.set_result(result)
                 except Exception as exc:
                     write_log("Browser processing failed", exception=True)
-                    future.set_exception(exc if isinstance(exc, ValueError) else ValueError(
-                        "Processing stopped. Check CLM before retrying, especially if upload was submitted."))
+                    if isinstance(exc, ValueError):
+                        future.set_exception(exc)
+                    else:
+                        wrapped = ValueError("Processing stopped. Check CLM before retrying, especially if upload was submitted.")
+                        wrapped.__cause__ = exc
+                        future.set_exception(wrapped)
                 continue
             if len(command) == 6 and command[0] == "download":
                 _, folders, filename, destination, future, updates = command

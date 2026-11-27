@@ -119,3 +119,19 @@ def test_main_entrypoint_survives_button_reruns(monkeypatch):
     assert not at.exception
     assert [b.label for b in at.button] == ['Sign in again']
     assert '1 processed.' in html(at)
+
+
+def test_processing_error_details_are_visible_and_redacted(monkeypatch):
+    class Failure(Fake):
+        def process_filepart(self, *args):
+            raise RuntimeError('diagnostic detail secret-password')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
+    monkeypatch.setenv('CLM_PASSWORD', 'secret-password')
+    monkeypatch.setattr(clm.browser, 'BrowserSession', Failure)
+    st.cache_resource.clear()
+    at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
+    at = at.button[0].click().run().button[0].click().run()
+    assert not at.exception
+    assert len(at.code) == 1
+    assert 'diagnostic detail [REDACTED]' in at.code[0].value
+    assert 'secret-password' not in at.code[0].value

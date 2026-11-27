@@ -4,10 +4,11 @@ from html import escape
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 import os
+import traceback
 
 import streamlit as st
 
-from clm.logging_file import write_log
+from clm.logging_file import redact, write_log
 from clm.browser import BrowserSession, processing_lock
 from clm.fileparts import configured_zones
 from clm.recovery import interrupted_uploads, preserve_interrupted_uploads
@@ -173,6 +174,7 @@ ss.setdefault("reports", [])      # (name, time) of uploaded ledgers
 ss.setdefault("notice", "")       # last run status or error, shown in the table header
 ss.setdefault("notice_bad", False)
 ss.setdefault("login_error", False)
+ss.setdefault("diagnostic", "")
 
 zone, zone_error = configured_zone()
 if zone and interrupted_uploads():
@@ -232,6 +234,7 @@ def run_zone():
     docs, reports = ss.docs, ss.reports
     docs.clear(); reports.clear()
     ss.notice, ss.notice_bad = "", False
+    ss.diagnostic = ""
     index = {}
     state = {"done": 0, "status": "", "issue_count": None}
 
@@ -288,9 +291,11 @@ def run_zone():
         write_log(ss.notice)
     except ValueError as exc:
         write_log("Processing stopped", exception=True)
+        ss.diagnostic = redact(traceback.format_exc())
         ss.notice, ss.notice_bad = f"Stopped: {exc}", True
     except Exception:
         write_log("Processing failed", exception=True)
+        ss.diagnostic = redact(traceback.format_exc())
         ss.notice, ss.notice_bad = "Processing failed. Check the server logs.", True
     ss.signed_in = False  # process_filepart always closes the browser session
     if not ss.notice_bad:
@@ -317,11 +322,19 @@ ledger_view.markdown(ledgers(ss.reports), unsafe_allow_html=True)
 signed_out = not ss.signed_in
 header = ss.notice or ("Signed out" if signed_out else "0 processed")
 view.markdown(table(ss.docs, header, ss.notice_bad or signed_out), unsafe_allow_html=True)
+if ss.diagnostic:
+    st.markdown("""<style>
+    [data-testid="stCode"] {position: fixed; z-index: 100; top: 8vh; left: 5vw;
+      width: 90vw; max-height: 65vh; overflow: auto; background: white;
+      border: 2px solid #d70015; border-radius: 8px; padding: 1em;}
+    </style>""", unsafe_allow_html=True)
+    st.code(ss.diagnostic)
 if signed_out:
     if button.button("Sign in again"):
         button.empty()
         st.markdown(HIDE, unsafe_allow_html=True)
         ss.notice, ss.notice_bad = "", False
+        ss.diagnostic = ""
         ss.docs.clear(); ss.reports.clear()
         sign_in()
         st.rerun()
