@@ -120,6 +120,7 @@ def upload_report(search_page, report_path, report, snapshot):
         report(f'Uploading report {report_path.name}.')
         try:
             page.get_by_role('menuitem', name='File', exact=True).click()
+            page.get_by_text('Upload', exact=True).hover(timeout=30000)
             upload = page.locator('input[type=file].primaryFileUploadInput')
             upload.wait_for(state='attached', timeout=30000)
             write_state(state, {'status': 'submitted', 'filename': report_path.name,

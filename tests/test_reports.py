@@ -200,6 +200,7 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
         def click(self, **kwargs):
             if self.name: visited.append(self.name)
         def count(self): return len(uploads)
+        def hover(self, **kwargs): visited.append('hover Upload')
         def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
         @property
         def first(self): return self
@@ -212,12 +213,13 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
             if selector == 'input[type=file].primaryFileUploadInput': visited.append('file input')
             return Locator()
         def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
+        def get_by_text(self, text, **kwargs): return Locator(text)
         def close(self): pass
     page = Page()
     page.url = 'https://example.test/search?aid=1'
     upload_report(page, target, lambda _: None, lambda _: None)
     assert 'Zona Sur' in visited and uploads == [str(target)]
-    assert visited.index('File') < visited.index('file input')
+    assert visited.index('File') < visited.index('hover Upload') < visited.index('file input')
 
 
 def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
