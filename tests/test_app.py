@@ -148,3 +148,22 @@ def test_failed_document_is_not_reported_as_clean_completion(monkeypatch):
     at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
     at = at.button[0].click().run().button[0].click().run()
     assert '0 processed. Complete with issues' in html(at)
+
+
+def test_browser_screenshots_remain_visible_after_failure(monkeypatch):
+    class Screenshots(Fake):
+        def process_filepart(self, progress=None, screenshot=None, event=None):
+            screenshot(b'first screenshot')
+            screenshot(b'second screenshot')
+            raise ValueError('Report upload failed')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
+    monkeypatch.setattr(clm.browser, 'BrowserSession', Screenshots)
+    st.cache_resource.clear()
+    at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
+    at = at.button[0].click().run().button[0].click().run()
+    page = html(at)
+    assert 'Browser screenshots' in page
+    assert 'Screenshot 1' in page and 'Screenshot 2' in page
+    assert 'Zmlyc3Qgc2NyZWVuc2hvdA==' in page
+    assert 'c2Vjb25kIHNjcmVlbnNob3Q=' in page
+    assert 'Stopped: Report upload failed' in page

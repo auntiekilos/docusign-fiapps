@@ -127,6 +127,7 @@ def upload_report(search_page, report_path, report, snapshot):
         documents_url = urlunsplit((parts.scheme, parts.netloc, '/atlas/Documents/BrowseDocuments.aspx',
                                    urlencode({'aid': account[0]}), ''))
         page.goto(documents_url, wait_until='domcontentloaded')
+        snapshot(page)
         def dismiss():
             close = page.locator('#walkthrough button.ux-modal__close')
             if close.is_visible():
@@ -138,6 +139,7 @@ def upload_report(search_page, report_path, report, snapshot):
             dismiss()
             click_folder_with_walkthrough_retry(page, folder)
             page.locator('a[aria-label="Navigate to folder ' + folder + '"]').wait_for(timeout=30000)
+            snapshot(page)
         page.wait_for_timeout(7000)
         dismiss()
         page.wait_for_timeout(1000)
@@ -163,6 +165,7 @@ def upload_report(search_page, report_path, report, snapshot):
         try:
             page.get_by_role('menuitem', name='File', exact=True).click()
             page.wait_for_timeout(3000)
+            snapshot(page)
             upload = open_menu_upload_input(page)
         except Exception as exc:
             # Nothing was sent, so the report stays pending and can be sent again.

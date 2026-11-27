@@ -342,6 +342,8 @@ class BrowserSession:
                                          event=lambda value: updates.put(("event", value)))
                     future.set_result(result)
                 except Exception as exc:
+                    if context is not None and context.pages:
+                        updates.put(("screenshot", page_image(context.pages[0])))
                     write_log("Browser processing failed", exception=True)
                     if isinstance(exc, ValueError):
                         future.set_exception(exc)

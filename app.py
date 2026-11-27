@@ -4,6 +4,7 @@ from html import escape
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 import os
+import base64
 import traceback
 
 import streamlit as st
@@ -22,7 +23,7 @@ CSS = """<style>
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif; --fs: clamp(15px, .35vw + 13px, 19px); --dock: calc(var(--fs) * 14);
   --edge: calc((100vw - min(110em, 96vw)) / 2 + var(--fs) * 1.2); --bx: calc(var(--edge) + var(--fs)); --by: calc(var(--dock) + var(--fs) * 2);}
 html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
-  overflow: hidden !important; background: var(--bg) !important; color: var(--fg); font: var(--fs)/1.5 var(--sans); -webkit-font-smoothing: antialiased;}
+  overflow-x: hidden !important; overflow-y: auto !important; background: var(--bg) !important; color: var(--fg); font: var(--fs)/1.5 var(--sans); -webkit-font-smoothing: antialiased;}
 .stApp p, .stApp button {font-family: var(--sans) !important;}
 #MainMenu, footer, header, [data-testid="stToolbar"], [data-testid="stDecoration"] {display: none !important;}
 .block-container {max-width: min(110em, 96vw) !important; margin: 0 auto; padding: 0 !important;}
@@ -175,6 +176,7 @@ ss.setdefault("notice", "")       # last run status or error, shown in the table
 ss.setdefault("notice_bad", False)
 ss.setdefault("login_error", False)
 ss.setdefault("diagnostic", "")
+ss.setdefault("screenshots", [])
 
 zone, zone_error = configured_zone()
 if zone and interrupted_uploads():
@@ -189,6 +191,26 @@ if zone and interrupted_uploads():
 button = st.empty()  # one fixed spot (see .stButton); emptied while work runs
 view = st.empty()
 ledger_view = st.empty()
+screenshots_view = st.empty()
+
+def show_screenshots():
+    if not ss.screenshots:
+        screenshots_view.empty()
+        return
+    images = "".join(
+        f'<figure><figcaption>Screenshot {i}</figcaption><img style="width:100%;height:auto" src="data:image/png;base64,{base64.b64encode(image).decode()}" /></figure>'
+        for i, image in enumerate(ss.screenshots, 1)
+    )
+    screenshots_view.markdown(
+        '<section style="position:relative;z-index:120;margin-top:100vh;background:white;padding:1.5em">'
+        '<h2>Browser screenshots</h2>' + images + '</section>', unsafe_allow_html=True)
+
+def record_screenshot(image):
+    if image:
+        ss.screenshots.append(image)
+        show_screenshots()
+
+show_screenshots()
 SETUP_POS = "<style>:root {--bx: calc(var(--edge) + var(--fs) * .2); --by: calc(var(--fs) * 1.5);}</style>"  # first screen: viewport bottom right
 HIDE = "<style>.stButton {display: none !important;}</style>"  # button must vanish at once, not when the run ends
 show_table = ss.signed_in or bool(ss.docs) or bool(ss.reports) or bool(ss.notice)
@@ -214,6 +236,8 @@ def sign_in():
     show()
     try:
         outcome = browser_session().login(os.environ.get("CLM_URL", ""), progress=progress)
+        if isinstance(outcome, (tuple, list)) and len(outcome) > 1:
+            record_screenshot(outcome[1])
         result = outcome[0] if isinstance(outcome, (tuple, list)) else outcome
         if result == "signed_in":
             settle("ok")
@@ -233,6 +257,7 @@ def sign_in():
 def run_zone():
     docs, reports = ss.docs, ss.reports
     docs.clear(); reports.clear()
+    ss.screenshots.clear(); show_screenshots()
     ss.notice, ss.notice_bad = "", False
     ss.diagnostic = ""
     index = {}
@@ -284,7 +309,7 @@ def run_zone():
     paint()
     write_log(f"Starting processing for zone {zone}")
     try:
-        total = browser_session().process_filepart(progress, None, event)
+        total = browser_session().process_filepart(progress, record_screenshot, event)
         state["status"] = ""
         count_done = state["done"] if total is None else total
         completion = "Complete with issues" if state["failed"] or state["issue_count"] else "Complete"
