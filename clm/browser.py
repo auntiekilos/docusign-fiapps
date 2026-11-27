@@ -257,20 +257,36 @@ class BrowserSession:
     def _process_filepart(self, progress=None, screenshot=None, event=None):
         from clm.fileparts import configured_zones
         from clm.recovery import preserve_interrupted_uploads
-        preserve_interrupted_uploads(configured_zones()[0])
-        total = 0
+        zone = configured_zones()[0]
         try:
             while True:
-                count = self._operation("filepart", progress, None, event)
-                total += max(count, 0)
-                self._operation("close", progress, None)
-                if count == 0:
-                    if progress:
-                        progress("No new documents. Waiting before the next scan.")
+                count = 0
+                failed = False
+                try:
+                    preserve_interrupted_uploads(zone)
+                    count = self._operation("filepart", progress, None, event)
+                except Exception as exc:
+                    failed = True
+                    write_log("Processing cycle failed; retrying", exception=True)
+                    if event:
+                        event({"type": "cycle_error", "reason": str(exc)})
+                try:
+                    self._operation("close", progress, None)
+                except Exception:
+                    write_log("Browser cleanup failed", exception=True)
+                if failed or count == 0:
                     time.sleep(60)
-                result, _ = self.login(os.environ.get("CLM_URL", ""), progress)
-                if result != "signed_in":
-                    raise ValueError("Sign-in could not be confirmed for the next scan.")
+                while True:
+                    try:
+                        result, _ = self.login(os.environ.get("CLM_URL", ""), progress)
+                        if result == "signed_in":
+                            break
+                        raise ValueError("Sign-in could not be confirmed.")
+                    except Exception as exc:
+                        write_log("Sign-in failed; retrying", exception=True)
+                        if event:
+                            event({"type": "cycle_error", "reason": str(exc)})
+                        time.sleep(60)
         finally:
             self._operation("close", progress, None)
 
