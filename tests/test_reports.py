@@ -52,7 +52,8 @@ def test_report_is_uploaded_before_advancing_page(tmp_path, monkeypatch):
     monkeypatch.setattr(reports, 'upload_report', lambda *args: events.append('uploaded'))
     with pytest.raises(RuntimeError, match='stop after advancing'):
         fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set())
-    assert events == ['processed', 'uploaded', 'next']
+    assert events == ['processed', 'next']
+    assert list((tmp_path / 'page-journals').glob('*.jsonl'))
 
 
 def test_total_report_includes_all_zone_history(tmp_path, monkeypatch):
@@ -237,3 +238,31 @@ def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
     assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 10
     assert processed == [str(i) for i in range(10)]
     assert len(uploaded) == 1 and '9.pdf' in uploaded[0] and '10.pdf' not in uploaded[0]
+
+
+def test_ten_lines_across_pages_produce_one_report(tmp_path, monkeypatch):
+    import json
+    from clm import fileparts, reports
+    monkeypatch.setenv('CLM_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(fileparts, 'select_search', lambda *a: None)
+    class Page:
+        url = 'https://example.test/search'
+        index = 0
+        def get_by_role(self, *args, **kwargs): return self
+        def count(self): return 1
+        def is_disabled(self): return False
+        def click(self): self.index += 1
+        def wait_for_function(self, *args, **kwargs): pass
+    page = Page()
+    monkeypatch.setattr(fileparts, 'page_results', lambda page: [(f'{i}.pdf', f'https://example.test/?Id={i}') for i in (range(6) if page.index == 0 else range(6, 15))])
+    def process(page, name, url, zone, report, snapshot, journal):
+        item = entry()
+        item.update(filename=name, document_url=url, document_id=url.split('=')[-1])
+        with journal.open('a') as stream: stream.write(json.dumps(item) + '\n')
+        return item['document_id']
+    monkeypatch.setattr(fileparts, 'process_document', process)
+    uploads = []
+    monkeypatch.setattr(reports, 'upload_report', lambda page, path, *args: uploads.append(path.read_text(encoding='utf-8-sig')))
+    assert fileparts.process_zone(page, lambda _: None, lambda _: None, 'Zona Sur', set()) == 10
+    assert page.index == 1 and len(uploads) == 1
+    assert '9.pdf' in uploads[0] and '10.pdf' not in uploads[0]

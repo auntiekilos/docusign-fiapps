@@ -91,7 +91,7 @@ def test_failed_document_retried_four_times_and_then_exhausted(tmp_path, monkeyp
         url = 'https://example.test/search'
         def get_by_role(self, *args, **kwargs): return Next()
     for _ in range(3):
-        assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == -1
+        assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 0
     assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 0
     assert fileparts.process_zone(Page(), lambda _: None, lambda _: None, 'Zona Sur', set()) == 0
     assert len(calls) == 4

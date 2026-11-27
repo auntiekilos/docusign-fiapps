@@ -326,11 +326,15 @@ def process_zone(page, report, snapshot, zone, known, event=None):
     select_search(page, report, zone)
     search_url = page.url
     total = 0
+    lines_seen = 0
     journal_dir = data_dir() / 'page-journals'
     journal_dir.mkdir(parents=True, exist_ok=True)
     import hashlib
     journal = journal_dir / (hashlib.sha256(zone.encode()).hexdigest() + '.jsonl')
-    finish_page_report(page, journal, zone, known, report, snapshot, event)
+    if journal.exists():
+        finish_page_report(page, journal, zone, known, report, snapshot, event)
+        report('Recovered the interrupted test report. Run stopped.')
+        return 0
     while True:
         batch_new = 0
         retry_needed = False
@@ -343,7 +347,9 @@ def process_zone(page, report, snapshot, zone, known, event=None):
                 if page.get_by_text('0 results', exact=True).is_visible():
                     return total
                 raise
-            for name, url in results:
+            selected = results[:TEST_DOCUMENT_LIMIT - lines_seen]
+            lines_seen += len(selected)
+            for name, url in selected:
                 document_id = parse_qs(urlsplit(url).query).get('Id', [None])[0]
                 if not document_id:
                     raise ValueError('A search result has no document ID.')
@@ -401,14 +407,14 @@ def process_zone(page, report, snapshot, zone, known, event=None):
                 attempt_path(zone, document_id).unlink(missing_ok=True)
                 batch_new += 1
                 total += 1
-                if total >= TEST_DOCUMENT_LIMIT:
-                    break
-            finish_page_report(page, journal, zone, known, report, snapshot, event)
-            if total >= TEST_DOCUMENT_LIMIT:
+            if lines_seen >= TEST_DOCUMENT_LIMIT:
+                finish_page_report(page, journal, zone, known, report, snapshot, event)
+            if lines_seen >= TEST_DOCUMENT_LIMIT:
                 report(f'Test limit of {TEST_DOCUMENT_LIMIT} documents reached.')
                 return total
             next_page = page.get_by_role('button', name='Go to next page')
             if not next_page.count() or next_page.is_disabled():
+                finish_page_report(page, journal, zone, known, report, snapshot, event)
                 break
             previous = results[0][1]
             next_page.click()
@@ -416,7 +422,7 @@ def process_zone(page, report, snapshot, zone, known, event=None):
         if total:
             return total
         if retry_needed:
-            return -1
+            return 0
         if known_seen or exhausted_seen:
             return 0
         raise ValueError('No results could be verified.')

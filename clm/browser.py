@@ -281,19 +281,7 @@ class BrowserSession:
                 count = operation_with_report_retry("filepart")
                 if count > 0:
                     total += count
-                if count >= 0:
-                    return total
-                if progress:
-                    progress("Waiting 10 minutes for DocuSign before a clean search.")
-                time.sleep(REINDEX_WAIT_SECONDS)
-                self._operation("close", progress, screenshot)
-                if progress:
-                    progress("Restarting browser for a clean search.")
-                result, image = self.login(os.environ.get("CLM_URL", ""), progress)
-                if screenshot and image:
-                    screenshot(image)
-                if result != "signed_in":
-                    raise ValueError("Sign-in not confirmed after browser restart.")
+                return total
         finally:
             self._operation("close", progress, screenshot)
 
