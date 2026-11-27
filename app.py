@@ -177,6 +177,7 @@ ss.setdefault("notice_bad", False)
 ss.setdefault("login_error", False)
 ss.setdefault("diagnostic", "")
 ss.setdefault("screenshots", [])
+ss.setdefault("activity_log", [])
 
 zone, zone_error = configured_zone()
 if zone and interrupted_uploads():
@@ -194,16 +195,21 @@ ledger_view = st.empty()
 screenshots_view = st.empty()
 
 def show_screenshots():
-    if not ss.screenshots:
+    if not ss.screenshots and not ss.activity_log:
         screenshots_view.empty()
         return
+    lines = "".join(f"<li>{escape(line)}</li>" for line in ss.activity_log)
     images = "".join(
         f'<figure><figcaption>Screenshot {i}</figcaption><img style="width:100%;height:auto" src="data:image/png;base64,{base64.b64encode(image).decode()}" /></figure>'
         for i, image in enumerate(ss.screenshots, 1)
     )
     screenshots_view.markdown(
         '<section style="position:relative;z-index:120;margin-top:100vh;background:white;padding:1.5em">'
-        '<h2>Browser screenshots</h2>' + images + '</section>', unsafe_allow_html=True)
+        '<h2>Activity log</h2><ol>' + lines + '</ol><h2>Browser screenshots</h2>' + images + '</section>', unsafe_allow_html=True)
+
+def log_activity(message):
+    ss.activity_log.append(f"{now()} {redact(str(message))}")
+    show_screenshots()
 
 def record_screenshot(image):
     if image:
@@ -257,7 +263,7 @@ def sign_in():
 def run_zone():
     docs, reports = ss.docs, ss.reports
     docs.clear(); reports.clear()
-    ss.screenshots.clear(); show_screenshots()
+    ss.screenshots.clear(); ss.activity_log.clear(); show_screenshots()
     ss.notice, ss.notice_bad = "", False
     ss.diagnostic = ""
     index = {}
@@ -303,6 +309,7 @@ def run_zone():
 
     def progress(message):
         write_log(message)
+        log_activity(message)
         state["status"] = str(message)
         paint()
 
@@ -317,10 +324,12 @@ def run_zone():
         write_log(ss.notice)
     except ValueError as exc:
         write_log("Processing stopped", exception=True)
+        log_activity(f"Processing stopped: {exc}")
         ss.diagnostic = redact(traceback.format_exc())
         ss.notice, ss.notice_bad = f"Stopped: {exc}", True
-    except Exception:
+    except Exception as exc:
         write_log("Processing failed", exception=True)
+        log_activity(f"Processing failed: {exc}")
         ss.diagnostic = redact(traceback.format_exc())
         ss.notice, ss.notice_bad = "Processing failed. Check the server logs.", True
     ss.signed_in = False  # process_filepart always closes the browser session

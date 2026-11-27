@@ -167,3 +167,22 @@ def test_browser_screenshots_remain_visible_after_failure(monkeypatch):
     assert 'Zmlyc3Qgc2NyZWVuc2hvdA==' in page
     assert 'c2Vjb25kIHNjcmVlbnNob3Q=' in page
     assert 'Stopped: Report upload failed' in page
+
+
+def test_activity_log_is_retained_and_redacts_credentials(monkeypatch):
+    class Logged(Fake):
+        def process_filepart(self, progress=None, screenshot=None, event=None):
+            progress('Opening <Users> secret-password')
+            progress('Report: clicked File')
+            raise ValueError('Report stopped')
+    monkeypatch.setenv('CLM_Zone', 'Zona Sur')
+    monkeypatch.setenv('CLM_PASSWORD', 'secret-password')
+    monkeypatch.setattr(clm.browser, 'BrowserSession', Logged)
+    st.cache_resource.clear()
+    at = AppTest.from_file(str(Path(__file__).parent.parent / 'app.py'), default_timeout=20).run()
+    at = at.button[0].click().run().button[0].click().run()
+    page = html(at)
+    assert 'Activity log' in page
+    assert 'Opening &lt;Users&gt; [REDACTED]' in page
+    assert page.index('Opening &lt;Users&gt;') < page.index('Report: clicked File')
+    assert 'secret-password' not in page

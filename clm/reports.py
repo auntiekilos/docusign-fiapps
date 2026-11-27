@@ -126,20 +126,28 @@ def upload_report(search_page, report_path, report, snapshot):
             raise ValueError('The search page has no DocuSign account ID.')
         documents_url = urlunsplit((parts.scheme, parts.netloc, '/atlas/Documents/BrowseDocuments.aspx',
                                    urlencode({'aid': account[0]}), ''))
+        report('Report: opening Documents in a new tab.')
         page.goto(documents_url, wait_until='domcontentloaded')
+        report('Report: Documents page loaded; waiting for folder list.')
         snapshot(page)
         def dismiss():
             close = page.locator('#walkthrough button.ux-modal__close')
             if close.is_visible():
+                report('Report: closing walkthrough popup.')
                 close.click(force=True)
         dismiss()
         page.locator('a[aria-label^="Navigate to folder "]').first.wait_for(timeout=30000)
+        report('Report: folder list ready.')
         from clm.fileparts import configured_zones
         for folder in (*REPORT_FOLDERS, configured_zones()[0]):
             dismiss()
+            report(f'Report: opening folder {folder}.')
             click_folder_with_walkthrough_retry(page, folder)
+            report(f'Report: clicked {folder}; waiting for folder breadcrumb.')
             page.locator('a[aria-label="Navigate to folder ' + folder + '"]').wait_for(timeout=30000)
+            report(f'Report: folder breadcrumb found for {folder}.')
             snapshot(page)
+        report('Report: waiting seven seconds for the walkthrough.')
         page.wait_for_timeout(7000)
         dismiss()
         page.wait_for_timeout(1000)
@@ -163,10 +171,14 @@ def upload_report(search_page, report_path, report, snapshot):
             raise ValueError(f'Report {report_path.name} already exists in DocuSign. Check it before continuing.')
         report(f'Uploading report {report_path.name}.')
         try:
+            report('Report: clicking File.')
             page.get_by_role('menuitem', name='File', exact=True).click()
+            report('Report: clicked File; waiting three seconds.')
             page.wait_for_timeout(3000)
             snapshot(page)
+            report(f'Report: looking for upload input; {upload_input_summary(page)}')
             upload = open_menu_upload_input(page)
+            report(f'Report: upload input found; {upload_input_summary(page)}')
         except Exception as exc:
             # Nothing was sent, so the report stays pending and can be sent again.
             snapshot(page)
@@ -175,12 +187,15 @@ def upload_report(search_page, report_path, report, snapshot):
                             'retry_after': time.time() + REPORT_RETRY_SECONDS})
         try:
             # The input covers the Upload label, so it receives the file directly.
+            report('Report: sending the file to the upload input.')
             upload.set_input_files(str(report_path))
+            report('Report: file sent; waiting for it to appear in the folder.')
             existing.wait_for(timeout=REPORT_CONFIRM_MS)
         except Exception as exc:
             snapshot(page)
             raise ReportUnconfirmed(f'Report {report_path.name} was not confirmed.') from exc
         write_state(state, {'status': 'uploaded', 'filename': report_path.name})
+        report('Report: uploaded file is visible in the folder.')
         snapshot(page)
     finally:
         page.close()
