@@ -5,8 +5,8 @@ CLM_URL = ""
 CLM_USERNAME = ""
 CLM_PASSWORD = ""
 CLM_Zone = ""
-# Docker Compose mounts persistent storage here. Change for non-Docker installs.
-CLM_DATA_DIR = "/data/clm"
+# Store working data in the application user’s home directory.
+CLM_DATA_DIR = os.path.expanduser("~/.clm")
 # Leave empty to use CLM_DATA_DIR/processed.jsonl.
 CLM_HISTORY_PATH = ""
 

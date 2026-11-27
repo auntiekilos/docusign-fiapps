@@ -4,7 +4,7 @@ services:
     ports:
       - "127.0.0.1:8501:8501"
     volumes:
-      - clm-data:/data/clm
+      - clm-data:/root/.clm
     shm_size: '1gb'
     restart: unless-stopped
 
