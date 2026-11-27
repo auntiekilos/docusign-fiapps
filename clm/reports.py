@@ -150,9 +150,7 @@ def upload_report(search_page, report_path, report, snapshot):
                 page.get_by_role('row').get_by_role('link', name=next_folder, exact=True).wait_for(state='visible', timeout=30000)
                 report(f'Report: found {next_folder} inside {folder}.')
             else:
-                report(f'Report: clicked {folder}; waiting for its heading.')
-                page.get_by_role('heading', name=folder, exact=True).wait_for(state='visible', timeout=30000)
-                report(f'Report: destination folder {folder} is open.')
+                report(f'Report: clicked destination folder {folder}; waiting before opening File.')
             snapshot(page)
         report('Report: waiting seven seconds for the walkthrough.')
         page.wait_for_timeout(7000)
