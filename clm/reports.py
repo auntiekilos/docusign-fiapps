@@ -71,6 +71,7 @@ def create_page_report(zone, entries):
 
 REPORT_FOLDERS = ('Users', 'Internal', 'Registro correcciones filepart')
 REPORT_RETRY_SECONDS = 5 * 60
+REPORT_CONFIRM_MS = 120000
 
 
 class ReportUnconfirmed(ValueError):
@@ -89,6 +90,30 @@ def click_folder_with_walkthrough_retry(page, folder):
             raise
         close.click(timeout=5000, force=True)
         link.click(timeout=30000)
+
+
+UPLOAD_INPUT = 'input[type=file].primaryFileUploadInput'
+
+
+def open_menu_upload_input(page):
+    """Return the one file input shown over the File menu's Upload item.
+
+    DocuSign places a transparent input on top of the Upload label. Hovering or
+    clicking the label fails because the input intercepts pointer events, and
+    other hidden upload inputs can exist on the page.
+    """
+    upload = page.locator(UPLOAD_INPUT + ':visible')
+    upload.wait_for(state='visible', timeout=30000)
+    return upload
+
+
+def upload_input_summary(page):
+    try:
+        attached = page.locator(UPLOAD_INPUT).count()
+        visible = page.locator(UPLOAD_INPUT + ':visible').count()
+        return f'{visible} visible of {attached} upload inputs.'
+    except Exception:
+        return 'upload inputs could not be inspected.'
 
 
 def upload_report(search_page, report_path, report, snapshot):
@@ -138,14 +163,19 @@ def upload_report(search_page, report_path, report, snapshot):
         try:
             page.get_by_role('menuitem', name='File', exact=True).click()
             page.wait_for_timeout(3000)
-            page.get_by_text('Upload', exact=True).hover(timeout=30000)
-            upload = page.locator('input[type=file].primaryFileUploadInput')
-            upload.wait_for(state='attached', timeout=30000)
-            write_state(state, {'status': 'submitted', 'filename': report_path.name,
-                                'retry_after': time.time() + REPORT_RETRY_SECONDS})
-            upload.set_input_files(str(report_path))
-            existing.wait_for(timeout=120000)
+            upload = open_menu_upload_input(page)
         except Exception as exc:
+            # Nothing was sent, so the report stays pending and can be sent again.
+            snapshot(page)
+            raise ReportUnconfirmed(f'Report {report_path.name} was not sent: {upload_input_summary(page)}') from exc
+        write_state(state, {'status': 'submitted', 'filename': report_path.name,
+                            'retry_after': time.time() + REPORT_RETRY_SECONDS})
+        try:
+            # The input covers the Upload label, so it receives the file directly.
+            upload.set_input_files(str(report_path))
+            existing.wait_for(timeout=REPORT_CONFIRM_MS)
+        except Exception as exc:
+            snapshot(page)
             raise ReportUnconfirmed(f'Report {report_path.name} was not confirmed.') from exc
         write_state(state, {'status': 'uploaded', 'filename': report_path.name})
         snapshot(page)

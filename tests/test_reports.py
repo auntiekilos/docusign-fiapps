@@ -201,7 +201,7 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
         def click(self, **kwargs):
             if self.name: visited.append(self.name)
         def count(self): return len(uploads)
-        def hover(self, **kwargs): visited.append('hover Upload')
+        def hover(self, **kwargs): raise AssertionError('The file input covers Upload; hovering fails in DocuSign')
         def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
         @property
         def first(self): return self
@@ -211,7 +211,7 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
         def new_page(self): return self
         def goto(self, *args, **kwargs): pass
         def locator(self, selector, **kwargs):
-            if selector == 'input[type=file].primaryFileUploadInput': visited.append('file input')
+            if selector == 'input[type=file].primaryFileUploadInput:visible': visited.append('file input')
             return Locator()
         def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
         def get_by_text(self, text, **kwargs): return Locator(text)
@@ -221,7 +221,7 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
     page.url = 'https://example.test/search?aid=1'
     upload_report(page, target, lambda _: None, lambda _: None)
     assert 'Zona Sur' in visited and uploads == [str(target)]
-    assert visited.index('Zona Sur') < visited.index('wait 7000') < visited.index('wait 1000') < visited.index('File') < visited.index('wait 3000') < visited.index('hover Upload') < visited.index('file input')
+    assert visited.index('Zona Sur') < visited.index('wait 7000') < visited.index('wait 1000') < visited.index('File') < visited.index('wait 3000') < visited.index('file input')
 
 
 def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
