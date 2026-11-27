@@ -141,3 +141,23 @@ def test_folder_click_closes_delayed_walkthrough(browser):
     click_folder_with_walkthrough_retry(page, 'Users')
     assert page.locator('body').get_attribute('data-opened') == 'yes'
     assert page.locator('#walkthrough').count() == 0
+
+
+def test_report_upload_confirmation_dialog(browser, fast_waits, tmp_path):
+    page = browser.new_page()
+    page.set_content('''<div role="dialog">Upload report.csv
+        <button onclick="document.body.dataset.confirmed='yes'">Upload</button>
+    </div>''')
+    messages = []
+    reports.confirm_report_upload_if_prompted(page, tmp_path / 'report.csv', messages.append)
+    assert page.locator('body').get_attribute('data-confirmed') == 'yes'
+    assert any('confirming upload' in message for message in messages)
+
+
+def test_report_confirmation_ignores_unrelated_dialog(browser, fast_waits, tmp_path):
+    page = browser.new_page()
+    page.set_content('''<div role="dialog">Unrelated settings
+        <button onclick="document.body.dataset.clicked='yes'">Save</button>
+    </div>''')
+    reports.confirm_report_upload_if_prompted(page, tmp_path / 'report.csv', lambda _: None)
+    assert page.locator('body').get_attribute('data-clicked') is None

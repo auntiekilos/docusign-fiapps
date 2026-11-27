@@ -189,6 +189,7 @@ def test_submitted_report_is_checked_without_resubmission(tmp_path, monkeypatch,
 
 def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkeypatch):
     from clm.reports import upload_report, write_state
+    monkeypatch.setattr('clm.reports.confirm_report_upload_if_prompted', lambda *args: None)
     monkeypatch.setenv('CLM_Zone', 'Zona Sur')
     target = tmp_path / 'report.csv'
     target.write_text('report')

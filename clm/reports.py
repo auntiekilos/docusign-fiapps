@@ -102,6 +102,26 @@ def open_upload_chooser(page):
     return chooser.value
 
 
+def confirm_report_upload_if_prompted(page, report_path, report):
+    """Confirm an upload-specific dialog if DocuSign displays one."""
+    page.wait_for_timeout(3000)
+    upload_dialog = page.get_by_role('dialog').filter(
+        has_text=re.compile(r'upload|' + re.escape(report_path.name), re.IGNORECASE)
+    )
+    buttons = upload_dialog.get_by_role('button', name=re.compile(
+        r'^(upload|accept|send|complete|confirm|ok|save)$', re.IGNORECASE
+    )).and_(page.locator(':visible'))
+    count = buttons.count()
+    if count > 1:
+        raise ValueError('Multiple report upload confirmation buttons are visible; cannot choose safely.')
+    if count == 1:
+        label = buttons.inner_text().strip()
+        report(f'Report: confirming upload with {label}.')
+        buttons.click(timeout=10000)
+    else:
+        report('Report: no upload confirmation dialog found.')
+
+
 def upload_input_summary(page):
     try:
         attached = page.locator(UPLOAD_INPUT).count()
@@ -188,7 +208,11 @@ def upload_report(search_page, report_path, report, snapshot):
         try:
             report('Report: selecting the report in the file chooser.')
             upload.set_files(str(report_path))
-            report('Report: file sent; waiting for it to appear in the folder.')
+            report('Report: file selected; checking for upload confirmation.')
+            snapshot(page)
+            confirm_report_upload_if_prompted(page, report_path, report)
+            snapshot(page)
+            report('Report: waiting for the file to appear in the folder.')
             existing.wait_for(timeout=REPORT_CONFIRM_MS)
         except Exception as exc:
             snapshot(page)
