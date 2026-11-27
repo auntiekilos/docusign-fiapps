@@ -119,8 +119,9 @@ def upload_report(search_page, report_path, report, snapshot):
             raise ValueError(f'Report {report_path.name} already exists in DocuSign. Check it before continuing.')
         report(f'Uploading report {report_path.name}.')
         try:
+            page.get_by_role('menuitem', name='File', exact=True).click()
             with page.expect_file_chooser(timeout=30000) as chooser:
-                page.get_by_role('menuitem', name='File', exact=True).click()
+                page.get_by_text('Upload', exact=True).click()
             write_state(state, {'status': 'submitted', 'filename': report_path.name,
                                 'retry_after': time.time() + REPORT_RETRY_SECONDS})
             chooser.value.set_files(str(report_path))

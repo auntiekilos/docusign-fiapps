@@ -211,6 +211,7 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
         def locator(self, *args, **kwargs): return Locator()
         def get_by_role(self, *args, **kwargs): return Locator(kwargs.get('name'))
         def close(self): pass
+        def get_by_text(self, text, **kwargs): return Locator(text)
         def expect_file_chooser(self, **kwargs): return self
         def __enter__(self): return self
         def __exit__(self, *args): pass
@@ -220,6 +221,7 @@ def test_missing_report_is_reuploaded_after_wait_in_zone_folder(tmp_path, monkey
     page.url = 'https://example.test/search?aid=1'
     upload_report(page, target, lambda _: None, lambda _: None)
     assert 'Zona Sur' in visited and uploads == [str(target)]
+    assert visited.index('File') < visited.index('Upload')
 
 
 def test_test_run_stops_at_ten_and_uploads_report(tmp_path, monkeypatch):
