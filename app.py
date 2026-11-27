@@ -7,6 +7,7 @@ import os
 
 import streamlit as st
 
+from clm.logging_file import write_log
 from clm.browser import BrowserSession, processing_lock
 from clm.fileparts import configured_zones
 from clm.recovery import interrupted_uploads, preserve_interrupted_uploads
@@ -242,6 +243,8 @@ def run_zone():
 
     def event(item):
         kind = item.get("type") if isinstance(item, dict) else None
+        if kind in ("document_failed", "ledger_uploaded"):
+            write_log(f"{kind}: {item}")
         if kind == "status":
             state["status"] = str(item.get("message", ""))
         elif kind in ("document_started", "document_finished", "document_failed"):
@@ -270,19 +273,24 @@ def run_zone():
         paint()
 
     def progress(message):
+        write_log(message)
         state["status"] = str(message)
         paint()
 
     paint()
+    write_log(f"Starting processing for zone {zone}")
     try:
         total = browser_session().process_filepart(progress, None, event)
         state["status"] = ""
         count_done = state["done"] if total is None else total
         completion = "Complete with issues" if state["issue_count"] else "Complete"
         ss.notice = f"{count_done} processed. {completion}"
+        write_log(ss.notice)
     except ValueError as exc:
+        write_log("Processing stopped", exception=True)
         ss.notice, ss.notice_bad = f"Stopped: {exc}", True
     except Exception:
+        write_log("Processing failed", exception=True)
         ss.notice, ss.notice_bad = "Processing failed. Check the server logs.", True
     ss.signed_in = False  # process_filepart always closes the browser session
     if not ss.notice_bad:

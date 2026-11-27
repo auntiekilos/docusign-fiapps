@@ -13,9 +13,11 @@ import time
 import shlex
 import tempfile
 from pathlib import Path
+from clm.logging_file import write_log
 
 
 def log_status(message: str) -> None:
+    write_log(message)
     print("\n" * 20 + "=== DOCUSIGN CLM ===\n" + message + "\n====================" + "\n" * 20, flush=True)
 
 
@@ -340,6 +342,7 @@ class BrowserSession:
                                          event=lambda value: updates.put(("event", value)))
                     future.set_result(result)
                 except Exception as exc:
+                    write_log("Browser processing failed", exception=True)
                     future.set_exception(exc if isinstance(exc, ValueError) else ValueError(
                         "Processing stopped. Check CLM before retrying, especially if upload was submitted."))
                 continue
@@ -422,6 +425,7 @@ class BrowserSession:
                 log_status("Sign-in confirmed." if result == "signed_in" else "Sign-in not confirmed.")
                 future.set_result((result, page_image(page)))
             except Exception as exc:
+                write_log(f"Sign-in failed while {stage}", exception=True)
                 message = str(exc) if isinstance(exc, ValueError) else f"Could not complete sign-in while {stage}."
                 log_status(message)
                 future.set_exception(LoginError(message, page_image(page)))
