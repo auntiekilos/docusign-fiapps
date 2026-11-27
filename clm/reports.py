@@ -77,6 +77,20 @@ class ReportUnconfirmed(ValueError):
     pass
 
 
+def click_folder_with_walkthrough_retry(page, folder):
+    """Handle a walkthrough that appears after the folder list loads."""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    link = page.get_by_role('row').get_by_role('link', name=folder, exact=True)
+    try:
+        link.click(timeout=5000)
+    except PlaywrightTimeoutError:
+        close = page.locator('#walkthrough button.ux-modal__close')
+        if not close.is_visible():
+            raise
+        close.click(timeout=5000, force=True)
+        link.click(timeout=30000)
+
+
 def upload_report(search_page, report_path, report, snapshot):
     """Upload from an independent tab, stopping if the result is ambiguous."""
     page = search_page.context.new_page()
@@ -97,7 +111,7 @@ def upload_report(search_page, report_path, report, snapshot):
         from clm.fileparts import configured_zones
         for folder in (*REPORT_FOLDERS, configured_zones()[0]):
             dismiss()
-            page.get_by_role('row').get_by_role('link', name=folder, exact=True).click(timeout=30000)
+            click_folder_with_walkthrough_retry(page, folder)
             page.locator('a[aria-label="Navigate to folder ' + folder + '"]').wait_for(timeout=30000)
         snapshot(page)
         existing = page.get_by_role('row').get_by_role('link', name=report_path.name, exact=True)
