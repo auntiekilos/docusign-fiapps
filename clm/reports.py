@@ -139,13 +139,20 @@ def upload_report(search_page, report_path, report, snapshot):
         page.locator('a[aria-label^="Navigate to folder "]').first.wait_for(timeout=30000)
         report('Report: folder list ready.')
         from clm.fileparts import configured_zones
-        for folder in (*REPORT_FOLDERS, configured_zones()[0]):
+        folders = (*REPORT_FOLDERS, configured_zones()[0])
+        for index, folder in enumerate(folders):
             dismiss()
             report(f'Report: opening folder {folder}.')
             click_folder_with_walkthrough_retry(page, folder)
-            report(f'Report: clicked {folder}; waiting for folder breadcrumb.')
-            page.locator('a[aria-label="Navigate to folder ' + folder + '"]').wait_for(timeout=30000)
-            report(f'Report: folder breadcrumb found for {folder}.')
+            if index + 1 < len(folders):
+                next_folder = folders[index + 1]
+                report(f'Report: clicked {folder}; waiting for {next_folder}.')
+                page.get_by_role('row').get_by_role('link', name=next_folder, exact=True).wait_for(state='visible', timeout=30000)
+                report(f'Report: found {next_folder} inside {folder}.')
+            else:
+                report(f'Report: clicked {folder}; waiting for its heading.')
+                page.get_by_role('heading', name=folder, exact=True).wait_for(state='visible', timeout=30000)
+                report(f'Report: destination folder {folder} is open.')
             snapshot(page)
         report('Report: waiting seven seconds for the walkthrough.')
         page.wait_for_timeout(7000)

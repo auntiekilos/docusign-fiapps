@@ -18,14 +18,15 @@ CLM_PAGE = '''<!doctype html><html><head><style>
   <li id="file" role="menuitem"><span class="menuLabel body-l-bold">File</span></li>
 </ul></div></div></div></div>
 <input id="stale" class="fileUploadInput primaryFileUploadInput" type="file" style="display:none">
-<nav id="crumbs"></nav><table id="rows"></table>
+<nav id="crumbs"></nav><h1 id="current"></h1><table id="rows"></table>
 <script>
 const options = OPTIONS;
 const tree = {'Documents': ['Users'], 'Users': ['Internal'], 'Internal': ['Registro correcciones filepart'],
               'Registro correcciones filepart': ['Zona Sur'], 'Zona Sur': []};
 const path = ['Documents'];
 function render() {
-  document.getElementById('crumbs').innerHTML = path.map(n => `<a aria-label="Navigate to folder ${n}">${n}</a>`).join(' / ');
+  document.getElementById('crumbs').innerHTML = '<a aria-label="Navigate to folder Documents">Documents</a>';
+  document.getElementById('current').textContent = path.at(-1);
   const rows = document.getElementById('rows');
   rows.innerHTML = '';
   for (const name of tree[path.at(-1)]) {
